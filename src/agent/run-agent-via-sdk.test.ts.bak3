@@ -1,0 +1,2441 @@
+/**
+ * runAgentViaSdk - Adapter Tests (TDD)
+ *
+ * Tests for the Claude Agent SDK adapter that replaces runEmbeddedPiAgent.
+ * Phase 15b: Full behavioral alignment with old pi-embedded runtime.
+ * Validates: params mapping, result format, settings sources,
+ * tool policy (sequential narrowing chain), system prompt (buildEmbeddedSystemPrompt),
+ * payload parsing (directives, tool meta, error handling), streaming callbacks, errors.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
+import type { SdkStreamEvent } from "./claude-sdk-runner.js";
+
+// ── Module mocks ─────────────────────────────────────────────────────
+
+vi.mock("./claude-sdk-runner.js", () => ({
+  createClaudeSdkRunner: vi.fn(),
+}));
+
+vi.mock("./agent-bridge.js", () => ({
+  BUILTIN_TOOLS: [
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Glob",
+    "Grep",
+    "Task",
+    "AskUserQuestion",
+    "EnterPlanMode",
+  ],
+  resolveMcpTools: vi.fn().mockReturnValue([]),
+}));
+
+// Policy modules — isToolAllowedByPolicyName (per-policy, sequential narrowing)
+vi.mock("../agents/pi-tools.policy.js", () => ({
+  resolveEffectiveToolPolicy: vi.fn().mockReturnValue({
+    agentId: undefined,
+    globalPolicy: undefined,
+    globalProviderPolicy: undefined,
+    agentPolicy: undefined,
+    agentProviderPolicy: undefined,
+    profile: undefined,
+    providerProfile: undefined,
+    profileAlsoAllow: undefined,
+    providerProfileAlsoAllow: undefined,
+  }),
+  resolveGroupToolPolicy: vi.fn().mockReturnValue(undefined),
+  resolveSubagentToolPolicy: vi
+    .fn()
+    .mockReturnValue({ deny: ["sessions_list", "memory_search", "memory_get"] }),
+  isToolAllowedByPolicyName: vi.fn().mockImplementation((_name: string, _policy: unknown) => {
+    // Default: allow everything (pass-through). Tests override per-case.
+    return true;
+  }),
+}));
+
+vi.mock("../agents/pi-tools.js", () => ({
+  createOpenClawCodingTools: vi.fn().mockReturnValue([
+    { name: "read", execute: async () => "file content", schema: { description: "Read a file" } },
+    { name: "write", execute: async () => "done", schema: { description: "Write to a file" } },
+    { name: "exec", execute: async () => "output", schema: { description: "Execute a command" } },
+  ]),
+}));
+
+vi.mock("../agents/tool-policy.js", () => ({
+  resolveToolProfilePolicy: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("../routing/session-key.js", () => ({
+  isSubagentSessionKey: vi.fn().mockReturnValue(false),
+}));
+
+// System prompt chain — buildEmbeddedSystemPrompt (NOT buildAgentSystemPrompt)
+vi.mock("../agents/pi-embedded-runner/system-prompt.js", () => ({
+  buildEmbeddedSystemPrompt: vi.fn().mockReturnValue(
+    "You are a personal assistant running inside OpenClaw.\n\n" +
+      "## Tooling\nAvailable tools: read, write\n\n" +
+      "## Safety\nDo not run dangerous commands.\n\n" +
+      "Workspace: /tmp/workspace",
+  ),
+}));
+
+vi.mock("../agents/system-prompt-params.js", () => ({
+  buildSystemPromptParams: vi.fn().mockReturnValue({
+    runtimeInfo: "Host: test-machine | OS: Linux 6.1 | Arch: x64",
+    userTimezone: "UTC",
+    userTime: "2025-06-01T12:00:00Z",
+    userTimeFormat: "24h",
+  }),
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveSessionAgentIds: vi.fn().mockReturnValue({
+    defaultAgentId: "default",
+    sessionAgentId: "default",
+  }),
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  resolveDefaultModelForAgent: vi.fn().mockReturnValue({
+    provider: "anthropic",
+    model: "claude-sonnet-4-5-20250514",
+  }),
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  buildModelAliasLines: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("../agents/docs-path.js", () => ({
+  resolveOpenClawDocsPath: vi.fn().mockResolvedValue("/docs/openclaw"),
+}));
+
+vi.mock("../config/channel-capabilities.js", () => ({
+  resolveChannelCapabilities: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("../agents/channel-tools.js", () => ({
+  listChannelSupportedActions: vi.fn().mockReturnValue(undefined),
+  resolveChannelMessageToolHints: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("../infra/machine-name.js", () => ({
+  getMachineDisplayName: vi.fn().mockResolvedValue("test-machine"),
+}));
+
+vi.mock("../utils/message-channel.js", () => ({
+  normalizeMessageChannel: vi.fn().mockImplementation((ch?: string) => ch ?? undefined),
+}));
+
+vi.mock("../telegram/reaction-level.js", () => ({
+  resolveTelegramReactionLevel: vi
+    .fn()
+    .mockReturnValue({ agentReactionGuidance: undefined }),
+}));
+
+vi.mock("../signal/reaction-level.js", () => ({
+  resolveSignalReactionLevel: vi
+    .fn()
+    .mockReturnValue({ agentReactionGuidance: undefined }),
+}));
+
+vi.mock("../telegram/inline-buttons.js", () => ({
+  resolveTelegramInlineButtonsScope: vi.fn().mockReturnValue("off"),
+}));
+
+vi.mock("../auto-reply/heartbeat.js", () => ({
+  resolveHeartbeatPrompt: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("../utils/provider-utils.js", () => ({
+  isReasoningTagProvider: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("../agents/pi-embedded-runner/sandbox-info.js", () => ({
+  buildEmbeddedSandboxInfo: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("../agents/sandbox/context.js", () => ({
+  resolveSandboxContext: vi.fn().mockResolvedValue(null),
+}));
+
+// Bootstrap context / skills / workspace notes (Fix A: prompt parity)
+vi.mock("../agents/bootstrap-files.js", () => ({
+  resolveBootstrapContextForRun: vi.fn().mockResolvedValue({
+    bootstrapFiles: [],
+    contextFiles: [],
+  }),
+}));
+
+vi.mock("../agents/skills/workspace.js", () => ({
+  resolveSkillsPromptForRun: vi.fn().mockReturnValue(""),
+  loadWorkspaceSkillEntries: vi.fn().mockReturnValue([]),
+  applySkillEnvOverrides: vi.fn().mockReturnValue(() => {}),
+  applySkillEnvOverridesFromSnapshot: vi.fn().mockReturnValue(() => {}),
+}));
+
+vi.mock("../agents/workspace.js", () => ({
+  DEFAULT_BOOTSTRAP_FILENAME: "BOOTSTRAP.md",
+}));
+
+// Reply directives & tokens
+vi.mock("../auto-reply/reply/reply-directives.js", () => ({
+  parseReplyDirectives: vi.fn().mockImplementation((raw: string) => ({
+    text: raw,
+    mediaUrls: undefined,
+    mediaUrl: undefined,
+    replyToId: undefined,
+    replyToCurrent: false,
+    replyToTag: false,
+    audioAsVoice: undefined,
+    isSilent: false,
+  })),
+}));
+
+vi.mock("../auto-reply/tokens.js", () => ({
+  SILENT_REPLY_TOKEN: "NO_REPLY",
+  isSilentReplyText: vi.fn().mockImplementation((text?: string) => {
+    if (!text) return false;
+    return text.trim() === "NO_REPLY" || text.trim().startsWith("NO_REPLY ");
+  }),
+}));
+
+// Tool meta & reasoning utils
+vi.mock("../auto-reply/tool-meta.js", () => ({
+  formatToolAggregate: vi
+    .fn()
+    .mockImplementation(
+      (toolName: string, metas?: string[]) =>
+        `[${toolName}${metas?.length ? `: ${metas.join(", ")}` : ""}]`,
+    ),
+}));
+
+vi.mock("../agents/pi-embedded-utils.js", () => ({
+  formatReasoningMessage: vi
+    .fn()
+    .mockImplementation((text: string) => `<thinking>${text}</thinking>`),
+  extractAssistantThinking: vi.fn().mockReturnValue(undefined),
+}));
+
+// ── Imports (after mocks) ─────────────────────────────────────────────
+
+import { createClaudeSdkRunner } from "./claude-sdk-runner.js";
+import {
+  runAgentViaSdk,
+  resolveSettingSources,
+  resolveAllowedTools,
+  buildSdkSystemPrompt,
+  buildSdkPayloads,
+} from "./run-agent-via-sdk.js";
+import { resolveMcpTools } from "./agent-bridge.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicy,
+  isToolAllowedByPolicyName,
+} from "../agents/pi-tools.policy.js";
+import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
+import { createOpenClawCodingTools } from "../agents/pi-tools.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
+import { buildEmbeddedSystemPrompt } from "../agents/pi-embedded-runner/system-prompt.js";
+import { buildSystemPromptParams } from "../agents/system-prompt-params.js";
+import { resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { getMachineDisplayName } from "../infra/machine-name.js";
+import { resolveSandboxContext } from "../agents/sandbox/context.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+import {
+  resolveSkillsPromptForRun,
+  loadWorkspaceSkillEntries,
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+} from "../agents/skills/workspace.js";
+import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
+
+// ── Helpers ───────────────────────────────────────────────────────────
+
+/** Create a mock SDK runner that yields given events. */
+function mockSdkRunner(events: SdkStreamEvent[]) {
+  const mockQuery = vi.fn().mockImplementation(async function* () {
+    for (const event of events) {
+      yield event;
+    }
+  });
+  vi.mocked(createClaudeSdkRunner).mockReturnValue({ query: mockQuery });
+  return mockQuery;
+}
+
+const baseParams: RunEmbeddedPiAgentParams = {
+  sessionId: "test-session-1",
+  sessionFile: "/tmp/test.jsonl",
+  workspaceDir: "/tmp/workspace",
+  prompt: "Hello",
+  timeoutMs: 30_000,
+  runId: "run-1",
+};
+
+const defaultEffectivePolicy = {
+  agentId: undefined,
+  globalPolicy: undefined,
+  globalProviderPolicy: undefined,
+  agentPolicy: undefined,
+  agentProviderPolicy: undefined,
+  profile: undefined,
+  providerProfile: undefined,
+  profileAlsoAllow: undefined,
+  providerProfileAlsoAllow: undefined,
+};
+
+function resetMocks() {
+  vi.clearAllMocks();
+  vi.mocked(isSubagentSessionKey).mockReturnValue(false);
+  vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({ ...defaultEffectivePolicy });
+  vi.mocked(resolveGroupToolPolicy).mockReturnValue(undefined);
+  vi.mocked(resolveToolProfilePolicy).mockReturnValue(undefined);
+  vi.mocked(resolveSandboxContext).mockResolvedValue(null);
+  vi.mocked(isToolAllowedByPolicyName).mockReturnValue(true);
+  vi.mocked(buildEmbeddedSystemPrompt).mockReturnValue(
+    "You are a personal assistant running inside OpenClaw.\n\n" +
+      "## Tooling\nAvailable tools: read, write\n\n" +
+      "## Safety\nDo not run dangerous commands.\n\n" +
+      "Workspace: /tmp/workspace",
+  );
+  vi.mocked(parseReplyDirectives).mockImplementation((raw: string) => ({
+    text: raw,
+    mediaUrls: undefined,
+    mediaUrl: undefined,
+    replyToId: undefined,
+    replyToCurrent: false,
+    replyToTag: false,
+    audioAsVoice: undefined,
+    isSilent: false,
+  }));
+  vi.mocked(isSilentReplyText).mockImplementation((text?: string) => {
+    if (!text) return false;
+    return text.trim() === "NO_REPLY" || text.trim().startsWith("NO_REPLY ");
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// runAgentViaSdk
+// ══════════════════════════════════════════════════════════════════════
+
+describe("runAgentViaSdk", () => {
+  beforeEach(resetMocks);
+
+  // ── Result structure ──────────────────────────────────────────────
+
+  it("returns EmbeddedPiRunResult with payloads and meta", async () => {
+    mockSdkRunner([
+      { type: "text", content: "Hello back!" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    const result = await runAgentViaSdk(baseParams);
+
+    expect(result).toHaveProperty("payloads");
+    expect(result).toHaveProperty("meta");
+    expect(result.meta).toHaveProperty("durationMs");
+    expect(result.meta.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads![0].text).toBe("Hello back!");
+  });
+
+  it("populates agentMeta with provider/model/sessionId", async () => {
+    mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+
+    const result = await runAgentViaSdk({
+      ...baseParams,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5-20250514",
+    });
+
+    expect(result.meta.agentMeta?.provider).toBe("anthropic");
+    expect(result.meta.agentMeta?.model).toBe("claude-sonnet-4-5-20250514");
+    expect(result.meta.agentMeta?.sessionId).toBe("test-session-1");
+  });
+
+  // ── Prompt passthrough ────────────────────────────────────────────
+
+  it("passes prompt to SDK runner", async () => {
+    const mockQuery = mockSdkRunner([
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    await runAgentViaSdk({ ...baseParams, prompt: "test prompt" });
+
+    expect(mockQuery).toHaveBeenCalledWith("test prompt", expect.any(Object));
+  });
+
+  // ── Streaming callbacks ───────────────────────────────────────────
+
+  it("calls onPartialReply for text events", async () => {
+    mockSdkRunner([
+      { type: "text", content: "chunk1" },
+      { type: "text", content: "chunk2" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+    const onPartialReply = vi.fn();
+
+    await runAgentViaSdk({ ...baseParams, onPartialReply });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "chunk1" });
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "chunk2" });
+  });
+
+  it("calls onAssistantMessageStart on first text event", async () => {
+    mockSdkRunner([
+      { type: "text", content: "a" },
+      { type: "text", content: "b" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+    const onAssistantMessageStart = vi.fn();
+
+    await runAgentViaSdk({ ...baseParams, onAssistantMessageStart });
+
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits lifecycle start and end via onAgentEvent", async () => {
+    mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+    const onAgentEvent = vi.fn();
+
+    await runAgentViaSdk({ ...baseParams, onAgentEvent });
+
+    const calls = onAgentEvent.mock.calls.map(([evt]) => evt);
+    expect(calls.find((e) => e.stream === "lifecycle" && e.data.phase === "start")).toBeDefined();
+    expect(calls.find((e) => e.stream === "lifecycle" && e.data.phase === "end")).toBeDefined();
+  });
+
+  it("emits tool start/end via onAgentEvent for tool events", async () => {
+    mockSdkRunner([
+      { type: "tool_call", name: "Read", arguments: { path: "/a" }, id: "tc1" },
+      { type: "tool_result", name: "Read", result: "content", id: "tc1" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+    const onAgentEvent = vi.fn();
+
+    await runAgentViaSdk({ ...baseParams, onAgentEvent });
+
+    const toolCalls = onAgentEvent.mock.calls
+      .map(([e]) => e)
+      .filter((e) => e.stream === "tool");
+    expect(toolCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({ phase: "start", name: "Read" }),
+        }),
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({ phase: "end", name: "Read" }),
+        }),
+      ]),
+    );
+  });
+
+  it("calls onToolResult when shouldEmitToolResult returns true", async () => {
+    mockSdkRunner([
+      { type: "tool_call", name: "Bash", arguments: { cmd: "ls" }, id: "tc2" },
+      { type: "tool_result", name: "Bash", result: "file.txt", id: "tc2" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+    const onToolResult = vi.fn();
+    const shouldEmitToolResult = vi.fn().mockReturnValue(true);
+
+    await runAgentViaSdk({ ...baseParams, onToolResult, shouldEmitToolResult });
+
+    expect(onToolResult).toHaveBeenCalledWith({ text: "file.txt" });
+  });
+
+  it("does NOT call onToolResult when shouldEmitToolResult returns false", async () => {
+    mockSdkRunner([
+      { type: "tool_call", name: "Bash", arguments: { cmd: "ls" }, id: "tc3" },
+      { type: "tool_result", name: "Bash", result: "file.txt", id: "tc3" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+    const onToolResult = vi.fn();
+    const shouldEmitToolResult = vi.fn().mockReturnValue(false);
+
+    await runAgentViaSdk({ ...baseParams, onToolResult, shouldEmitToolResult });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
+  it("calls onBlockReplyFlush after stream ends", async () => {
+    mockSdkRunner([
+      { type: "text", content: "hello" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+    const onBlockReplyFlush = vi.fn();
+
+    await runAgentViaSdk({ ...baseParams, onBlockReplyFlush });
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Error handling ────────────────────────────────────────────────
+
+  it("returns meta.error for context overflow (does NOT throw)", async () => {
+    vi.mocked(createClaudeSdkRunner).mockReturnValue({
+      query: () => {
+        async function* gen() {
+          throw new Error("context_length_exceeded: too many tokens");
+        }
+        return gen();
+      },
+    });
+
+    const result = await runAgentViaSdk(baseParams);
+
+    expect(result.meta.error).toBeDefined();
+    expect(result.meta.error!.kind).toBe("context_overflow");
+    expect(result.meta.error!.message).toContain("context_length_exceeded");
+  });
+
+  it("returns meta.error for compaction failure (does NOT throw)", async () => {
+    vi.mocked(createClaudeSdkRunner).mockReturnValue({
+      query: () => {
+        async function* gen() {
+          throw new Error("compaction failed: unable to reduce context");
+        }
+        return gen();
+      },
+    });
+
+    const result = await runAgentViaSdk(baseParams);
+
+    expect(result.meta.error).toBeDefined();
+    expect(result.meta.error!.kind).toBe("compaction_failure");
+  });
+
+  it("throws for non-recoverable errors (network, unknown)", async () => {
+    vi.mocked(createClaudeSdkRunner).mockReturnValue({
+      query: () => {
+        async function* gen() {
+          throw new Error("connection refused");
+        }
+        return gen();
+      },
+    });
+
+    await expect(runAgentViaSdk(baseParams)).rejects.toThrow("connection refused");
+  });
+
+  it("emits lifecycle error event on failure", async () => {
+    vi.mocked(createClaudeSdkRunner).mockReturnValue({
+      query: () => {
+        async function* gen() {
+          throw new Error("context_length_exceeded");
+        }
+        return gen();
+      },
+    });
+    const onAgentEvent = vi.fn();
+
+    await runAgentViaSdk({ ...baseParams, onAgentEvent });
+
+    const errorEvt = onAgentEvent.mock.calls
+      .map(([e]) => e)
+      .find((e) => e.stream === "lifecycle" && e.data.phase === "error");
+    expect(errorEvt).toBeDefined();
+  });
+
+  // ── SDK runner options ────────────────────────────────────────────
+
+  it("passes settingSources to SDK runner (not hardcoded)", async () => {
+    const mockQuery = mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+
+    await runAgentViaSdk({ ...baseParams, workspaceDir: "/ws" });
+
+    const sdkOpts = mockQuery.mock.calls[0][1];
+    expect(sdkOpts.settingSources).toContain("user");
+    expect(sdkOpts.settingSources).toContain("project");
+  });
+
+  it("passes additionalDirectories when agentDir is set", async () => {
+    const mockQuery = mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+
+    await runAgentViaSdk({ ...baseParams, agentDir: "/agents/default" });
+
+    const sdkOpts = mockQuery.mock.calls[0][1];
+    expect(sdkOpts.additionalDirectories).toContain("/agents/default");
+  });
+
+  it("passes allowedTools from BUILTIN_TOOLS when disableTools is false", async () => {
+    const mockQuery = mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+
+    await runAgentViaSdk(baseParams);
+
+    const sdkOpts = mockQuery.mock.calls[0][1];
+    expect(sdkOpts.allowedTools).toContain("Read");
+    expect(sdkOpts.allowedTools).toContain("Write");
+    expect(sdkOpts.allowedTools).toContain("Bash");
+  });
+
+  it("passes empty allowedTools when disableTools is true", async () => {
+    const mockQuery = mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+
+    await runAgentViaSdk({ ...baseParams, disableTools: true });
+
+    const sdkOpts = mockQuery.mock.calls[0][1];
+    expect(sdkOpts.allowedTools).toHaveLength(0);
+  });
+
+  // ── Text concatenation ────────────────────────────────────────────
+
+  it("concatenates multiple text events into a single payload", async () => {
+    mockSdkRunner([
+      { type: "text", content: "Hello " },
+      { type: "text", content: "World" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    const result = await runAgentViaSdk(baseParams);
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads![0].text).toBe("Hello World");
+  });
+
+  it("returns empty payloads array when no text is produced", async () => {
+    mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+
+    const result = await runAgentViaSdk(baseParams);
+
+    expect(result.payloads).toEqual([]);
+  });
+
+  // ── Integration: payloads include directive-parsed fields ─────────
+
+  it("payloads include directive-parsed fields from SDK output", async () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Here is the image",
+      mediaUrls: ["https://example.com/img.png"],
+      mediaUrl: "https://example.com/img.png",
+      replyToId: undefined,
+      replyToCurrent: true,
+      replyToTag: true,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+    mockSdkRunner([
+      {
+        type: "text",
+        content: "Here is the image MEDIA: https://example.com/img.png [[reply_to_current]]",
+      },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    const result = await runAgentViaSdk(baseParams);
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads![0].text).toBe("Here is the image");
+    expect(result.payloads![0].mediaUrls).toEqual(["https://example.com/img.png"]);
+    expect(result.payloads![0].replyToCurrent).toBe(true);
+  });
+
+  it("silent reply from SDK produces empty payloads", async () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: true,
+    });
+    mockSdkRunner([
+      { type: "text", content: "NO_REPLY" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    const result = await runAgentViaSdk(baseParams);
+
+    expect(result.payloads).toEqual([]);
+  });
+
+  // ── Integration: sandbox context resolved ─────────────────────────
+
+  it("resolves sandbox context and passes to tool policy + prompt", async () => {
+    vi.mocked(resolveSandboxContext).mockResolvedValue({
+      enabled: true,
+      tools: { deny: ["exec"] },
+    } as any);
+    // Make isToolAllowedByPolicyName actually check deny lists
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+    const mockQuery = mockSdkRunner([{ type: "complete", stopReason: "end_turn" }]);
+
+    await runAgentViaSdk(baseParams);
+
+    // Bash (canonical: exec) should be excluded by sandbox deny
+    const sdkOpts = mockQuery.mock.calls[0][1];
+    expect(sdkOpts.allowedTools).not.toContain("Bash");
+    expect(sdkOpts.allowedTools).toContain("Read");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// resolveSettingSources
+// ══════════════════════════════════════════════════════════════════════
+
+describe("resolveSettingSources", () => {
+  it("includes both user and project when workspaceDir is present", () => {
+    const sources = resolveSettingSources({ workspaceDir: "/tmp/workspace" });
+    expect(sources).toContain("user");
+    expect(sources).toContain("project");
+  });
+
+  it("does NOT hardcode only ['project']", () => {
+    const sources = resolveSettingSources({ workspaceDir: "/tmp/workspace" });
+    expect(sources).not.toEqual(["project"]);
+    expect(sources.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("includes user even when workspaceDir is empty", () => {
+    const sources = resolveSettingSources({ workspaceDir: "" });
+    expect(sources).toContain("user");
+  });
+
+  it("excludes project when workspaceDir is empty", () => {
+    const sources = resolveSettingSources({ workspaceDir: "" });
+    expect(sources).not.toContain("project");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// resolveAllowedTools — sequential narrowing chain
+// ══════════════════════════════════════════════════════════════════════
+
+describe("resolveAllowedTools", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isSubagentSessionKey).mockReturnValue(false);
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({ ...defaultEffectivePolicy });
+    vi.mocked(resolveGroupToolPolicy).mockReturnValue(undefined);
+    vi.mocked(resolveToolProfilePolicy).mockReturnValue(undefined);
+    vi.mocked(isToolAllowedByPolicyName).mockReturnValue(true);
+  });
+
+  it("returns builtin tools by default (no policies active)", () => {
+    const tools = resolveAllowedTools({});
+    expect(tools.length).toBeGreaterThan(0);
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Write");
+    expect(tools).toContain("Bash");
+    expect(tools).toContain("Glob");
+    expect(tools).toContain("Grep");
+  });
+
+  it("returns empty array when disableTools is true", () => {
+    const tools = resolveAllowedTools({ disableTools: true });
+    expect(tools).toHaveLength(0);
+  });
+
+  // ── Policy filtering (sequential narrowing) ──────────────────────
+
+  it("deny list blocks specific tools (Bash excluded when exec denied)", () => {
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({
+      ...defaultEffectivePolicy,
+      globalPolicy: { deny: ["exec"] },
+    });
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({});
+
+    expect(tools).not.toContain("Bash");
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Write");
+  });
+
+  it("allow list restricts to only listed tools", () => {
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({
+      ...defaultEffectivePolicy,
+      globalPolicy: { allow: ["read", "write"] },
+    });
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({});
+
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Write");
+    expect(tools).not.toContain("Bash");
+    expect(tools).not.toContain("Glob");
+  });
+
+  it("sandbox policy filters tools (exec denied by sandbox)", () => {
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({}, { deny: ["exec"] });
+
+    expect(tools).not.toContain("Bash");
+    expect(tools).toContain("Read");
+  });
+
+  it("sandbox allow-list restricts to only allowed canonical tools", () => {
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({}, { allow: ["read", "grep"] });
+
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Grep");
+    expect(tools).not.toContain("Bash");
+    expect(tools).not.toContain("Write");
+  });
+
+  it("subagent policy applied for subagent session keys", () => {
+    vi.mocked(isSubagentSessionKey).mockReturnValue(true);
+
+    resolveAllowedTools({ sessionKey: "subagent:task1" });
+
+    expect(resolveSubagentToolPolicy).toHaveBeenCalled();
+  });
+
+  it("subagent policy NOT applied for regular sessions", () => {
+    vi.mocked(isSubagentSessionKey).mockReturnValue(false);
+
+    resolveAllowedTools({ sessionKey: "agent:main:main" });
+
+    expect(isSubagentSessionKey).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("provider and model forwarded to resolveEffectiveToolPolicy", () => {
+    resolveAllowedTools({ provider: "openai", model: "gpt-4" });
+
+    expect(resolveEffectiveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelProvider: "openai",
+        modelId: "gpt-4",
+      }),
+    );
+  });
+
+  it("resolves both profile and providerProfile policies", () => {
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({
+      ...defaultEffectivePolicy,
+      profile: "restrictive",
+      providerProfile: "permissive",
+    });
+
+    resolveAllowedTools({});
+
+    // resolveToolProfilePolicy called twice: once for profile, once for providerProfile
+    expect(resolveToolProfilePolicy).toHaveBeenCalledWith("restrictive");
+    expect(resolveToolProfilePolicy).toHaveBeenCalledWith("permissive");
+    expect(resolveToolProfilePolicy).toHaveBeenCalledTimes(2);
+  });
+
+  it("merges alsoAllow into profile policy allow list", () => {
+    // Profile only allows "read" but alsoAllow adds "exec"
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({
+      ...defaultEffectivePolicy,
+      profileAlsoAllow: ["exec"],
+    });
+    // First call (profile) returns allow list; second call (providerProfile) returns undefined
+    vi.mocked(resolveToolProfilePolicy)
+      .mockReturnValueOnce({ allow: ["read"] })
+      .mockReturnValueOnce(undefined);
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({});
+
+    // "read" allowed directly, "exec" added via alsoAllow → Bash should be present
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Bash");
+  });
+
+  it("merges providerProfileAlsoAllow into provider profile policy", () => {
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({
+      ...defaultEffectivePolicy,
+      providerProfileAlsoAllow: ["write"],
+    });
+    // Only first call (profile) returns undefined; second call (providerProfile) returns allow list
+    vi.mocked(resolveToolProfilePolicy)
+      .mockReturnValueOnce(undefined) // profile → no restriction
+      .mockReturnValueOnce({ allow: ["read"] }); // providerProfile → only read
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({});
+
+    // providerProfile allows read, alsoAllow adds write → Read and Write present
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Write");
+    // But Bash (exec) is not in providerProfile allow → blocked
+    expect(tools).not.toContain("Bash");
+  });
+
+  it("sequential chain: later stage can further narrow tools", () => {
+    // Global allows all, but agent policy denies exec
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({
+      ...defaultEffectivePolicy,
+      globalPolicy: undefined, // no restriction
+      agentPolicy: { deny: ["exec", "web_search"] },
+    });
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({});
+
+    expect(tools).not.toContain("Bash");
+    expect(tools).not.toContain("WebSearch");
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Write");
+  });
+
+  // ── MCP tools integration ──────────────────────────────────────────
+
+  it("includes MCP tools when mcpServers provided", () => {
+    vi.mocked(resolveMcpTools).mockReturnValue([
+      "mcp__memory__recall",
+      "mcp__memory__remember",
+      "mcp__sessions__list",
+      "mcp__message__send",
+    ]);
+
+    const tools = resolveAllowedTools({
+      mcpServers: [
+        { name: "memory", command: "mcp-memory" },
+        { name: "sessions", command: "mcp-sessions" },
+        { name: "message", command: "mcp-message" },
+      ],
+    } as any);
+
+    expect(resolveMcpTools).toHaveBeenCalledWith([
+      { name: "memory", command: "mcp-memory" },
+      { name: "sessions", command: "mcp-sessions" },
+      { name: "message", command: "mcp-message" },
+    ]);
+    expect(tools).toContain("mcp__memory__recall");
+    expect(tools).toContain("mcp__memory__remember");
+    expect(tools).toContain("mcp__sessions__list");
+    expect(tools).toContain("mcp__message__send");
+  });
+
+  it("includes both builtin and MCP tools in candidates", () => {
+    vi.mocked(resolveMcpTools).mockReturnValue([
+      "mcp__memory__recall",
+      "mcp__sessions__list",
+    ]);
+
+    const tools = resolveAllowedTools({
+      mcpServers: [
+        { name: "memory", command: "mcp-memory" },
+        { name: "sessions", command: "mcp-sessions" },
+      ],
+    } as any);
+
+    // Both builtin and MCP tools should be present
+    expect(tools).toContain("Read");
+    expect(tools).toContain("Write");
+    expect(tools).toContain("mcp__memory__recall");
+    expect(tools).toContain("mcp__sessions__list");
+  });
+
+  it("filters MCP tools via policy like builtin tools", () => {
+    vi.mocked(resolveMcpTools).mockReturnValue([
+      "mcp__memory__recall",
+      "mcp__sessions__list",
+    ]);
+    vi.mocked(resolveEffectiveToolPolicy).mockReturnValue({
+      ...defaultEffectivePolicy,
+      globalPolicy: { deny: ["memory_recall"] },
+    });
+    vi.mocked(isToolAllowedByPolicyName).mockImplementation(
+      (name: string, policy: any) => {
+        if (!policy) return true;
+        if (policy.deny?.includes(name)) return false;
+        if (policy.allow && !policy.allow.includes(name)) return false;
+        return true;
+      },
+    );
+
+    const tools = resolveAllowedTools({
+      mcpServers: [
+        { name: "memory", command: "mcp-memory" },
+        { name: "sessions", command: "mcp-sessions" },
+      ],
+    } as any);
+
+    expect(tools).not.toContain("mcp__memory__recall");
+    expect(tools).toContain("mcp__sessions__list");
+  });
+
+  it("excludes MCP tools when no mcpServers provided", () => {
+    vi.mocked(resolveMcpTools).mockReturnValue([]);
+
+    const tools = resolveAllowedTools({});
+
+    const mcpTools = tools.filter((t) => t.startsWith("mcp__"));
+    expect(mcpTools).toHaveLength(0);
+    expect(resolveMcpTools).toHaveBeenCalledWith(undefined);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// buildSdkSystemPrompt — delegates to buildEmbeddedSystemPrompt
+// ══════════════════════════════════════════════════════════════════════
+
+describe("buildSdkSystemPrompt", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isSubagentSessionKey).mockReturnValue(false);
+    vi.mocked(buildEmbeddedSystemPrompt).mockReturnValue(
+      "You are a personal assistant running inside OpenClaw.\n\n" +
+        "## Tooling\nAvailable tools: read, write\n\n" +
+        "## Safety\nDo not run dangerous commands.\n\n" +
+        "Workspace: /tmp/workspace",
+    );
+  });
+
+  it("calls buildEmbeddedSystemPrompt (not buildAgentSystemPrompt directly)", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: ["Read", "Write"],
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalled();
+  });
+
+  it("prompt contains OpenClaw identity text", async () => {
+    const { systemPrompt } = await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: ["Read", "Write"],
+    });
+
+    expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw");
+  });
+
+  it("maps SDK tool names to canonical names for prompt", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: ["Read", "Write", "Bash"],
+    });
+
+    const call = vi.mocked(buildEmbeddedSystemPrompt).mock.calls[0][0];
+    // Tools should have canonical names (lowercase) as .name
+    const toolNames = call.tools.map((t: any) => t.name);
+    expect(toolNames).toContain("read");
+    expect(toolNames).toContain("write");
+    expect(toolNames).toContain("exec"); // Bash → exec
+  });
+
+  it("forwards extraSystemPrompt to buildEmbeddedSystemPrompt", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+      extraSystemPrompt: "Custom instructions here",
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extraSystemPrompt: "Custom instructions here",
+      }),
+    );
+  });
+
+  it('uses "minimal" promptMode for subagent session keys', async () => {
+    vi.mocked(isSubagentSessionKey).mockReturnValue(true);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+      sessionKey: "subagent:task1",
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMode: "minimal",
+      }),
+    );
+  });
+
+  it('uses "full" promptMode for regular sessions', async () => {
+    vi.mocked(isSubagentSessionKey).mockReturnValue(false);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMode: "full",
+      }),
+    );
+  });
+
+  it("forwards workspaceDir to buildEmbeddedSystemPrompt", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/my/project",
+      allowedToolNames: [],
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/my/project",
+      }),
+    );
+  });
+
+  it("prompt includes safety section content", async () => {
+    const { systemPrompt } = await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+    });
+
+    expect(systemPrompt).toContain("Safety");
+  });
+
+  it("resolves runtimeInfo via buildSystemPromptParams", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+    });
+
+    expect(buildSystemPromptParams).toHaveBeenCalled();
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeInfo: expect.any(String),
+      }),
+    );
+  });
+
+  it("resolves machine name asynchronously", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+    });
+
+    expect(getMachineDisplayName).toHaveBeenCalled();
+  });
+
+  it("resolves session agent IDs for prompt context", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+      sessionKey: "agent:custom:main",
+      config: {} as any,
+    });
+
+    expect(resolveSessionAgentIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:custom:main",
+      }),
+    );
+  });
+
+  it("forwards ownerNumbers to buildEmbeddedSystemPrompt", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+      ownerNumbers: ["+1234567890"],
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerNumbers: ["+1234567890"],
+      }),
+    );
+  });
+
+  it("forwards reasoningLevel and thinkLevel", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/tmp/workspace",
+      allowedToolNames: [],
+      reasoningLevel: "on" as any,
+      thinkLevel: "extended" as any,
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoningLevel: "on",
+        defaultThinkLevel: "extended",
+      }),
+    );
+  });
+
+  // ── Fix A: contextFiles resolved from bootstrap ────────────────────
+
+  it("passes contextFiles from resolveBootstrapContextForRun", async () => {
+    const fakeContextFiles = [
+      { path: "/workspace/BOOTSTRAP.md", content: "bootstrap content" },
+      { path: "/workspace/MEMORY.md", content: "memory content" },
+    ];
+    vi.mocked(resolveBootstrapContextForRun).mockResolvedValue({
+      bootstrapFiles: [
+        { name: "BOOTSTRAP.md", path: "/workspace/BOOTSTRAP.md", missing: false },
+        { name: "MEMORY.md", path: "/workspace/MEMORY.md", missing: false },
+      ] as any,
+      contextFiles: fakeContextFiles,
+    });
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/workspace",
+      allowedToolNames: [],
+    });
+
+    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/workspace" }),
+    );
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ contextFiles: fakeContextFiles }),
+    );
+  });
+
+  // ── Fix A: workspaceNotes derived from BOOTSTRAP.md presence ────────
+
+  it("passes workspaceNotes when BOOTSTRAP.md is present", async () => {
+    vi.mocked(resolveBootstrapContextForRun).mockResolvedValue({
+      bootstrapFiles: [
+        { name: "BOOTSTRAP.md", path: "/ws/BOOTSTRAP.md", missing: false },
+      ] as any,
+      contextFiles: [],
+    });
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceNotes: expect.arrayContaining([expect.stringContaining("commit")]),
+      }),
+    );
+  });
+
+  it("passes undefined workspaceNotes when BOOTSTRAP.md is missing", async () => {
+    vi.mocked(resolveBootstrapContextForRun).mockResolvedValue({
+      bootstrapFiles: [
+        { name: "MEMORY.md", path: "/ws/MEMORY.md", missing: false },
+      ] as any,
+      contextFiles: [],
+    });
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceNotes: undefined }),
+    );
+  });
+
+  // ── Fix A: skillsPrompt resolved from workspace ─────────────────────
+
+  it("passes skillsPrompt from resolveSkillsPromptForRun", async () => {
+    vi.mocked(resolveSkillsPromptForRun).mockReturnValue(
+      "## Skills (mandatory)\n- my-skill: does something",
+    );
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      skillsSnapshot: { prompt: "cached skill prompt" } as any,
+    });
+
+    expect(resolveSkillsPromptForRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/ws",
+      }),
+    );
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillsPrompt: "## Skills (mandatory)\n- my-skill: does something",
+      }),
+    );
+  });
+
+  it("passes empty skillsPrompt when no skills exist", async () => {
+    vi.mocked(resolveSkillsPromptForRun).mockReturnValue("");
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+    });
+
+    expect(buildEmbeddedSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillsPrompt: "",
+      }),
+    );
+  });
+
+  // ── Fix C: skillsPrompt environment overrides ───────────────────────────
+
+  it("loads skill entries when skillsSnapshot is missing", async () => {
+    const fakeEntries = [{ name: "test-skill", path: "/skills/test" }];
+    vi.mocked(loadWorkspaceSkillEntries).mockReturnValue(fakeEntries as any);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      // No skillsSnapshot provided
+    });
+
+    expect(loadWorkspaceSkillEntries).toHaveBeenCalledWith("/ws", expect.any(Object));
+  });
+
+  it("loads skill entries when skillsSnapshot has no resolvedSkills", async () => {
+    const fakeEntries = [{ name: "test-skill", path: "/skills/test" }];
+    vi.mocked(loadWorkspaceSkillEntries).mockReturnValue(fakeEntries as any);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      skillsSnapshot: { prompt: "cached" } as any, // No resolvedSkills
+    });
+
+    expect(loadWorkspaceSkillEntries).toHaveBeenCalledWith("/ws", expect.any(Object));
+  });
+
+  it("does not load skill entries when skillsSnapshot has resolvedSkills", async () => {
+    vi.mocked(loadWorkspaceSkillEntries).mockClear();
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      skillsSnapshot: {
+        prompt: "cached",
+        resolvedSkills: [{ name: "skill1" }],
+      } as any,
+    });
+
+    expect(loadWorkspaceSkillEntries).not.toHaveBeenCalled();
+  });
+
+  it("applies env overrides from entries when no snapshot", async () => {
+    const fakeEntries = [{ name: "test-skill", path: "/skills/test" }];
+    vi.mocked(loadWorkspaceSkillEntries).mockReturnValue(fakeEntries as any);
+    const mockRestore = vi.fn();
+    vi.mocked(applySkillEnvOverrides).mockReturnValue(mockRestore);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      // No skillsSnapshot
+    });
+
+    expect(applySkillEnvOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skills: fakeEntries,
+      }),
+    );
+  });
+
+  it("applies env overrides from snapshot when snapshot provided", async () => {
+    const mockSnapshot = { prompt: "cached", resolvedSkills: [] } as any;
+    const mockRestore = vi.fn();
+    vi.mocked(applySkillEnvOverridesFromSnapshot).mockReturnValue(mockRestore);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      skillsSnapshot: mockSnapshot,
+    });
+
+    expect(applySkillEnvOverridesFromSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: mockSnapshot,
+      }),
+    );
+  });
+
+  it("passes loaded entries to resolveSkillsPromptForRun", async () => {
+    const fakeEntries = [{ name: "test-skill", path: "/skills/test" }];
+    vi.mocked(loadWorkspaceSkillEntries).mockReturnValue(fakeEntries as any);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      // No skillsSnapshot
+    });
+
+    expect(resolveSkillsPromptForRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entries: fakeEntries,
+      }),
+    );
+  });
+
+  it("does not pass entries to resolveSkillsPromptForRun when snapshot has resolvedSkills", async () => {
+    vi.mocked(loadWorkspaceSkillEntries).mockClear();
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: [],
+      skillsSnapshot: {
+        prompt: "cached",
+        resolvedSkills: [{ name: "skill1" }],
+      } as any,
+    });
+
+    expect(resolveSkillsPromptForRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entries: undefined,
+      }),
+    );
+  });
+
+  // ── Fix D: Real tool definitions for summaries ──────────────────────────
+
+  it("calls createOpenClawCodingTools to get real tool definitions", async () => {
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: ["Read", "Write", "Bash"],
+    });
+
+    expect(createOpenClawCodingTools).toHaveBeenCalled();
+  });
+
+  it("passes real tool definitions to buildEmbeddedSystemPrompt", async () => {
+    const mockTools = [
+      { name: "read", execute: async () => "", schema: { description: "Read a file" } },
+      { name: "write", execute: async () => "", schema: { description: "Write to a file" } },
+    ];
+    vi.mocked(createOpenClawCodingTools).mockReturnValue(mockTools as any);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: ["Read", "Write"],
+    });
+
+    const call = vi.mocked(buildEmbeddedSystemPrompt).mock.calls[0][0];
+    expect(call.tools).toBeDefined();
+    expect(call.tools.length).toBeGreaterThan(0);
+    // Tools should have real definitions, not just pseudo {name, execute: async () => ""}
+    expect(call.tools[0].schema).toBeDefined();
+  });
+
+  it("filters tools to match allowedToolNames (canonical)", async () => {
+    const mockTools = [
+      { name: "read", execute: async () => "", schema: { description: "Read" } },
+      { name: "write", execute: async () => "", schema: { description: "Write" } },
+      { name: "exec", execute: async () => "", schema: { description: "Execute" } },
+    ];
+    vi.mocked(createOpenClawCodingTools).mockReturnValue(mockTools as any);
+
+    await buildSdkSystemPrompt({
+      workspaceDir: "/ws",
+      allowedToolNames: ["Read", "Bash"], // SDK names, should map to read, exec
+    });
+
+    const call = vi.mocked(buildEmbeddedSystemPrompt).mock.calls[0][0];
+    const toolNames = call.tools.map((t: any) => t.name);
+    expect(toolNames).toContain("read");
+    expect(toolNames).toContain("exec");
+    expect(toolNames).not.toContain("write");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// buildSdkPayloads — directive parsing, tool meta, error handling
+// ══════════════════════════════════════════════════════════════════════
+
+describe("buildSdkPayloads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(parseReplyDirectives).mockImplementation((raw: string) => ({
+      text: raw,
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    }));
+    vi.mocked(isSilentReplyText).mockImplementation((text?: string) => {
+      if (!text) return false;
+      return text.trim() === "NO_REPLY" || text.trim().startsWith("NO_REPLY ");
+    });
+  });
+
+  // ── Basic text ────────────────────────────────────────────────────
+
+  it("plain text → [{ text: 'Hello' }]", () => {
+    const payloads = buildSdkPayloads({ assistantTexts: ["Hello"] });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toBe("Hello");
+  });
+
+  it("empty array → []", () => {
+    const payloads = buildSdkPayloads({ assistantTexts: [] });
+    expect(payloads).toEqual([]);
+  });
+
+  it("whitespace-only text → []", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "   ",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({ assistantTexts: ["   "] });
+    expect(payloads).toEqual([]);
+  });
+
+  // ── Silent reply ──────────────────────────────────────────────────
+
+  it("silent reply (NO_REPLY) → []", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: true,
+    });
+
+    const payloads = buildSdkPayloads({ assistantTexts: ["NO_REPLY"] });
+
+    expect(payloads).toEqual([]);
+  });
+
+  // ── Media extraction ──────────────────────────────────────────────
+
+  it("extracts MEDIA: URLs into mediaUrl/mediaUrls", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Here is an image",
+      mediaUrls: ["https://example.com/photo.jpg"],
+      mediaUrl: "https://example.com/photo.jpg",
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Here is an image MEDIA: https://example.com/photo.jpg"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].mediaUrl).toBe("https://example.com/photo.jpg");
+    expect(payloads[0].mediaUrls).toEqual(["https://example.com/photo.jpg"]);
+  });
+
+  // ── Reply directives ──────────────────────────────────────────────
+
+  it("extracts [[reply_to_current]] → replyToCurrent: true", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Got it",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: true,
+      replyToTag: true,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Got it [[reply_to_current]]"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].replyToCurrent).toBe(true);
+  });
+
+  it("extracts [[reply_to:123]] → replyToId: '123'", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Replying",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: "123",
+      replyToCurrent: false,
+      replyToTag: true,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Replying [[reply_to:123]]"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].replyToId).toBe("123");
+  });
+
+  // ── Audio-as-voice ────────────────────────────────────────────────
+
+  it("extracts [[audio_as_voice]] → audioAsVoice: true", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Voice message",
+      mediaUrls: ["https://example.com/audio.ogg"],
+      mediaUrl: "https://example.com/audio.ogg",
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: true,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: [
+        "Voice message MEDIA: https://example.com/audio.ogg [[audio_as_voice]]",
+      ],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].audioAsVoice).toBe(true);
+  });
+
+  it("audioAsVoice propagated to all media items", () => {
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        text: "Voice",
+        mediaUrls: ["https://example.com/a.ogg"],
+        mediaUrl: "https://example.com/a.ogg",
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: true,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        text: "Also media",
+        mediaUrls: ["https://example.com/b.ogg"],
+        mediaUrl: "https://example.com/b.ogg",
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Voice", "Also media"],
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0].audioAsVoice).toBe(true);
+    // Second item also gets audioAsVoice because it has media and another item had the tag
+    expect(payloads[1].audioAsVoice).toBe(true);
+  });
+
+  // ── Mixed directives ──────────────────────────────────────────────
+
+  it("multiple texts with mixed directives", () => {
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        text: "Text one",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        text: "",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: true,
+      })
+      .mockReturnValueOnce({
+        text: "Text three",
+        mediaUrls: ["https://example.com/img.png"],
+        mediaUrl: "https://example.com/img.png",
+        replyToId: "456",
+        replyToCurrent: false,
+        replyToTag: true,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: [
+        "Text one",
+        "NO_REPLY",
+        "Text three MEDIA: https://example.com/img.png [[reply_to:456]]",
+      ],
+    });
+
+    // Silent reply skipped
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0].text).toBe("Text one");
+    expect(payloads[1].text).toBe("Text three");
+    expect(payloads[1].replyToId).toBe("456");
+    expect(payloads[1].mediaUrls).toEqual(["https://example.com/img.png"]);
+  });
+
+  // ── Inline tool results (Fix #4) ─────────────────────────────────
+
+  it("includes inline tool results when verboseLevel is not 'off'", () => {
+    // formatToolAggregate returns formatted text, parseReplyDirectives processes it
+    vi.mocked(formatToolAggregate).mockReturnValue("[Read: file contents]");
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        // Tool meta result
+        text: "[Read: file contents]",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        // Assistant text
+        text: "Here is the content",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Here is the content"],
+      toolMetas: [{ toolName: "Read", meta: "file contents" }],
+      verboseLevel: "on" as any,
+      inlineToolResultsAllowed: true,
+    });
+
+    expect(payloads.length).toBeGreaterThanOrEqual(2);
+    expect(formatToolAggregate).toHaveBeenCalledWith("Read", ["file contents"], expect.any(Object));
+    // First payload is tool meta, second is assistant text
+    expect(payloads[0].text).toBe("[Read: file contents]");
+    expect(payloads[1].text).toBe("Here is the content");
+  });
+
+  it("excludes inline tool results when verboseLevel is 'off'", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Just the answer",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Just the answer"],
+      toolMetas: [{ toolName: "Read", meta: "file contents" }],
+      verboseLevel: "off" as any,
+      inlineToolResultsAllowed: true,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toBe("Just the answer");
+    expect(formatToolAggregate).not.toHaveBeenCalled();
+  });
+
+  it("excludes inline tool results when inlineToolResultsAllowed is false", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Answer",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Answer"],
+      toolMetas: [{ toolName: "Bash", meta: "output" }],
+      verboseLevel: "on" as any,
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(formatToolAggregate).not.toHaveBeenCalled();
+  });
+
+  it("uses markdown format for tool results when toolResultFormat is 'markdown'", () => {
+    vi.mocked(formatToolAggregate).mockReturnValue("[Read: data]");
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        text: "[Read: data]",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        text: "Done",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+
+    buildSdkPayloads({
+      assistantTexts: ["Done"],
+      toolMetas: [{ toolName: "Read", meta: "data" }],
+      verboseLevel: "on" as any,
+      inlineToolResultsAllowed: true,
+      toolResultFormat: "markdown" as any,
+    });
+
+    expect(formatToolAggregate).toHaveBeenCalledWith(
+      "Read",
+      ["data"],
+      expect.objectContaining({ markdown: true }),
+    );
+  });
+
+  // ── Last tool error (Fix #4) ──────────────────────────────────────
+
+  it("shows tool error when no user-facing reply and error is not recoverable", () => {
+    vi.mocked(formatToolAggregate).mockReturnValue("[Bash]");
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "Bash",
+        meta: "ls /missing",
+        error: "No such file or directory",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toContain("⚠️");
+    expect(payloads[0].text).toContain("failed");
+    expect(payloads[0].isError).toBe(true);
+  });
+
+  it("suppresses tool error when user-facing reply exists", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "I encountered an error but here is what I found",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["I encountered an error but here is what I found"],
+      lastToolError: {
+        toolName: "Bash",
+        error: "No such file",
+      },
+    });
+
+    // Error not shown because assistant already provided a reply
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].isError).toBeUndefined();
+    expect(payloads[0].text).toBe("I encountered an error but here is what I found");
+  });
+
+  it("suppresses recoverable errors (missing/required/invalid)", () => {
+    const payloads = buildSdkPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "Write",
+        error: "required parameter 'path' is missing",
+      },
+    });
+
+    // Recoverable error → suppressed even without user-facing reply
+    expect(payloads).toEqual([]);
+  });
+
+  it("suppresses recoverable errors with 'must be' pattern", () => {
+    const payloads = buildSdkPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "Edit",
+        error: "old_string must be unique in the file",
+      },
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("includes error suffix in tool error message", () => {
+    vi.mocked(formatToolAggregate).mockReturnValue("[Bash: rm -rf /]");
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "Bash",
+        meta: "rm -rf /",
+        error: "Permission denied",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toContain("Permission denied");
+  });
+
+  // ── Fix C: reasoning text in payloads ──────────────────────────────
+
+  it("includes reasoning text when reasoningLevel='on' and thinkingTexts provided", () => {
+    vi.mocked(formatReasoningMessage).mockReturnValue("Reasoning:\n_I need to think_");
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        text: "Reasoning:\n_I need to think_",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        text: "Here is my answer",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Here is my answer"],
+      thinkingTexts: ["I need to think"],
+      reasoningLevel: "on" as any,
+    });
+
+    expect(formatReasoningMessage).toHaveBeenCalledWith("I need to think");
+    expect(payloads.length).toBeGreaterThanOrEqual(2);
+    expect(payloads[0].text).toContain("Reasoning");
+    expect(payloads[1].text).toBe("Here is my answer");
+  });
+
+  it("excludes reasoning text when reasoningLevel='off'", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Just the answer",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Just the answer"],
+      thinkingTexts: ["Some thinking"],
+      reasoningLevel: "off" as any,
+    });
+
+    expect(formatReasoningMessage).not.toHaveBeenCalled();
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toBe("Just the answer");
+  });
+
+  it("excludes reasoning text when no thinkingTexts", () => {
+    vi.mocked(parseReplyDirectives).mockReturnValueOnce({
+      text: "Answer",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: false,
+      replyToTag: false,
+      audioAsVoice: undefined,
+      isSilent: false,
+    });
+
+    const payloads = buildSdkPayloads({
+      assistantTexts: ["Answer"],
+      thinkingTexts: [],
+      reasoningLevel: "on" as any,
+    });
+
+    expect(formatReasoningMessage).not.toHaveBeenCalled();
+    expect(payloads).toHaveLength(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// runAgentViaSdk — thinking block capture + tool meta canonical mapping
+// ══════════════════════════════════════════════════════════════════════
+
+describe("runAgentViaSdk — thinking + tool meta canonical", () => {
+  beforeEach(resetMocks);
+
+  it("captures thinking events and includes reasoning in payloads (reasoningLevel=on)", async () => {
+    vi.mocked(formatReasoningMessage).mockReturnValue("Reasoning:\n_deep thought_");
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        text: "Reasoning:\n_deep thought_",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        text: "Final answer",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+    mockSdkRunner([
+      { type: "thinking" as any, content: "deep thought" },
+      { type: "text", content: "Final answer" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    const result = await runAgentViaSdk({
+      ...baseParams,
+      reasoningLevel: "on" as any,
+    });
+
+    expect(result.payloads.length).toBeGreaterThanOrEqual(2);
+    expect(result.payloads[0].text).toContain("Reasoning");
+    expect(result.payloads[1].text).toBe("Final answer");
+  });
+
+  it("streams reasoning via onReasoningStream callback", async () => {
+    mockSdkRunner([
+      { type: "thinking" as any, content: "step 1" },
+      { type: "thinking" as any, content: "step 2" },
+      { type: "text", content: "answer" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+    const onReasoningStream = vi.fn();
+
+    await runAgentViaSdk({
+      ...baseParams,
+      reasoningLevel: "stream" as any,
+      onReasoningStream,
+    });
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(2);
+    expect(onReasoningStream).toHaveBeenCalledWith({ text: "step 1" });
+    expect(onReasoningStream).toHaveBeenCalledWith({ text: "step 2" });
+  });
+
+  it("maps tool_result names to canonical in toolMetas (Read → read)", async () => {
+    vi.mocked(formatToolAggregate).mockReturnValue("[read: content]");
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        text: "[read: content]",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        text: "Done",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+    mockSdkRunner([
+      { type: "tool_call", name: "Read", arguments: { path: "/a" }, id: "tc1" },
+      { type: "tool_result", name: "Read", result: "content", id: "tc1" },
+      { type: "text", content: "Done" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    await runAgentViaSdk({
+      ...baseParams,
+      verboseLevel: "on" as any,
+    });
+
+    // formatToolAggregate should receive canonical name "read", not SDK name "Read"
+    expect(formatToolAggregate).toHaveBeenCalledWith(
+      "read",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("maps Bash tool_result to canonical 'exec' in toolMetas", async () => {
+    vi.mocked(formatToolAggregate).mockReturnValue("[exec: ls]");
+    vi.mocked(parseReplyDirectives)
+      .mockReturnValueOnce({
+        text: "[exec: ls]",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      })
+      .mockReturnValueOnce({
+        text: "Done",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+    mockSdkRunner([
+      { type: "tool_call", name: "Bash", arguments: { cmd: "ls" }, id: "tc1" },
+      { type: "tool_result", name: "Bash", result: "file.txt", id: "tc1" },
+      { type: "text", content: "Done" },
+      { type: "complete", stopReason: "end_turn" },
+    ]);
+
+    await runAgentViaSdk({
+      ...baseParams,
+      verboseLevel: "on" as any,
+    });
+
+    // formatToolAggregate should receive "exec", not "Bash"
+    expect(formatToolAggregate).toHaveBeenCalledWith(
+      "exec",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  describe("tool_call/tool_result ID linking", () => {
+    it("populates tool_result.name from tool_call ID mapping", async () => {
+      const onAgentEvent = vi.fn();
+      mockSdkRunner([
+        { type: "tool_call", name: "Read", arguments: { path: "/file" }, id: "call_123" },
+        { type: "tool_result", name: "", result: "contents", id: "call_123" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({ ...baseParams, onAgentEvent });
+
+      const toolEndEvents = onAgentEvent.mock.calls
+        .map(([e]) => e)
+        .filter((e: any) => e.stream === "tool" && e.data?.phase === "end");
+
+      expect(toolEndEvents).toHaveLength(1);
+      expect(toolEndEvents[0].data.name).toBe("Read");
+    });
+
+    it("tool meta uses canonical name from ID mapping (Read → read)", async () => {
+      vi.mocked(formatToolAggregate).mockReturnValue("[read: data]");
+      vi.mocked(parseReplyDirectives).mockReturnValue({
+        text: "[read: data]",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+      mockSdkRunner([
+        { type: "tool_call", name: "Read", arguments: { path: "/a" }, id: "t1" },
+        { type: "tool_result", name: "", result: "data", id: "t1" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({
+        ...baseParams,
+        verboseLevel: "on" as any,
+      });
+
+      expect(formatToolAggregate).toHaveBeenCalledWith(
+        "read",
+        expect.any(Array),
+        expect.any(Object),
+      );
+    });
+
+    it("uses 'unknown' fallback when tool_result ID has no mapping", async () => {
+      const onAgentEvent = vi.fn();
+      mockSdkRunner([
+        { type: "tool_result", name: "", result: "data", id: "unknown_id_999" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({ ...baseParams, onAgentEvent });
+
+      const toolEndEvents = onAgentEvent.mock.calls
+        .map(([e]) => e)
+        .filter((e: any) => e.stream === "tool" && e.data?.phase === "end");
+
+      expect(toolEndEvents).toHaveLength(1);
+      expect(toolEndEvents[0].data.name).toBe("unknown");
+    });
+
+    it("maps Bash tool_call to exec canonical via ID", async () => {
+      vi.mocked(formatToolAggregate).mockReturnValue("[exec: ls]");
+      vi.mocked(parseReplyDirectives).mockReturnValue({
+        text: "[exec: ls]",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: undefined,
+        isSilent: false,
+      });
+      mockSdkRunner([
+        { type: "tool_call", name: "Bash", arguments: { cmd: "ls" }, id: "t2" },
+        { type: "tool_result", name: "", result: "file.txt", id: "t2" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({
+        ...baseParams,
+        verboseLevel: "on" as any,
+      });
+
+      expect(formatToolAggregate).toHaveBeenCalledWith(
+        "exec",
+        expect.any(Array),
+        expect.any(Object),
+      );
+    });
+
+    it("maps multiple tool calls/results independently", async () => {
+      const onAgentEvent = vi.fn();
+      mockSdkRunner([
+        { type: "tool_call", name: "Read", arguments: { path: "/a" }, id: "t1" },
+        { type: "tool_result", name: "", result: "a", id: "t1" },
+        { type: "tool_call", name: "Write", arguments: { path: "/b", text: "x" }, id: "t2" },
+        { type: "tool_result", name: "", result: "done", id: "t2" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({ ...baseParams, onAgentEvent });
+
+      const toolEndEvents = onAgentEvent.mock.calls
+        .map(([e]) => e)
+        .filter((e: any) => e.stream === "tool" && e.data?.phase === "end");
+
+      expect(toolEndEvents).toHaveLength(2);
+      expect(toolEndEvents[0].data.name).toBe("Read");
+      expect(toolEndEvents[1].data.name).toBe("Write");
+    });
+
+    it("uses event.name as fallback when ID lookup fails but name provided", async () => {
+      const onAgentEvent = vi.fn();
+      // Simulate SDK providing name in tool_result (future-proofing)
+      mockSdkRunner([
+        { type: "tool_result", name: "Read", result: "data", id: "unknown" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({ ...baseParams, onAgentEvent });
+
+      const toolEndEvents = onAgentEvent.mock.calls
+        .map(([e]) => e)
+        .filter((e: any) => e.stream === "tool" && e.data?.phase === "end");
+
+      expect(toolEndEvents).toHaveLength(1);
+      expect(toolEndEvents[0].data.name).toBe("Read");
+    });
+
+    it("onToolResult callback receives tool result with correct canonical name", async () => {
+      const onToolResult = vi.fn();
+      const shouldEmitToolResult = vi.fn().mockReturnValue(true);
+      mockSdkRunner([
+        { type: "tool_call", name: "Bash", arguments: { cmd: "echo" }, id: "t3" },
+        { type: "tool_result", name: "", result: "output", id: "t3" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({
+        ...baseParams,
+        onToolResult,
+        shouldEmitToolResult,
+      });
+
+      expect(onToolResult).toHaveBeenCalledWith({ text: "output" });
+    });
+
+    it("complete flow: tool_call → tool_result → payload with canonical name", async () => {
+      vi.mocked(formatToolAggregate).mockReturnValue("[read: /file content]");
+      vi.mocked(parseReplyDirectives)
+        .mockReturnValueOnce({
+          text: "[read: /file content]",
+          mediaUrls: undefined,
+          mediaUrl: undefined,
+          replyToId: undefined,
+          replyToCurrent: false,
+          replyToTag: false,
+          audioAsVoice: undefined,
+          isSilent: false,
+        })
+        .mockReturnValueOnce({
+          text: "I found the answer in /file",
+          mediaUrls: undefined,
+          mediaUrl: undefined,
+          replyToId: undefined,
+          replyToCurrent: false,
+          replyToTag: false,
+          audioAsVoice: undefined,
+          isSilent: false,
+        });
+      mockSdkRunner([
+        { type: "tool_call", name: "Read", arguments: { path: "/file" }, id: "call_abc" },
+        { type: "tool_result", name: "", result: "/file content", id: "call_abc" },
+        { type: "text", content: "I found the answer in /file" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      const result = await runAgentViaSdk({
+        ...baseParams,
+        verboseLevel: "on" as any,
+      });
+
+      expect(result.payloads.length).toBeGreaterThanOrEqual(2);
+      expect(result.payloads[0].text).toContain("read");
+      expect(result.payloads[1].text).toContain("I found the answer");
+    });
+  });
+
+  describe("skill environment restore", () => {
+    it("calls restore function in finally block (with skillsSnapshot)", async () => {
+      const mockRestore = vi.fn();
+      vi.mocked(applySkillEnvOverridesFromSnapshot).mockReturnValue(mockRestore);
+      mockSdkRunner([
+        { type: "text", content: "Done" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({
+        ...baseParams,
+        skillsSnapshot: { prompt: "cached" } as any,
+      });
+
+      expect(applySkillEnvOverridesFromSnapshot).toHaveBeenCalled();
+      expect(mockRestore).toHaveBeenCalled();
+    });
+
+    it("calls restore function in finally block (without skillsSnapshot)", async () => {
+      const mockRestore = vi.fn();
+      vi.mocked(applySkillEnvOverrides).mockReturnValue(mockRestore);
+      vi.mocked(loadWorkspaceSkillEntries).mockReturnValue([]);
+      mockSdkRunner([
+        { type: "text", content: "Done" },
+        { type: "complete", stopReason: "end_turn" },
+      ]);
+
+      await runAgentViaSdk({
+        ...baseParams,
+        // No skillsSnapshot
+      });
+
+      expect(applySkillEnvOverrides).toHaveBeenCalled();
+      expect(mockRestore).toHaveBeenCalled();
+    });
+
+    it("calls restore even if error occurs during agent run", async () => {
+      const mockRestore = vi.fn();
+      vi.mocked(applySkillEnvOverrides).mockReturnValue(mockRestore);
+      vi.mocked(loadWorkspaceSkillEntries).mockReturnValue([]);
+
+      // Mock SDK runner to throw error
+      mockSdkRunner([]);
+      vi.mocked(createClaudeSdkRunner).mockReturnValue({
+        query: async function* () {
+          throw new Error("SDK error");
+        },
+      } as any);
+
+      await expect(runAgentViaSdk(baseParams)).rejects.toThrow("SDK error");
+
+      expect(mockRestore).toHaveBeenCalled();
+    });
+  });
+});
