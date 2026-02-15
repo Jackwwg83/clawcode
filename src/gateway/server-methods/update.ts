@@ -18,6 +18,18 @@ import {
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {
+    // --- ClawCode runtime fork: block gateway update ---
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "ClawCode runtime 分支不支持 update.run。请通过 git pull 升级。详见：https://github.com/Jackwwg83/clawcode",
+      ),
+    );
+    return;
+    // --- end ClawCode guard ---
+
     if (!validateUpdateRunParams(params)) {
       respond(
         false,

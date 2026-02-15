@@ -445,6 +445,19 @@ async function maybeRestartService(params: {
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
+  // --- ClawCode runtime fork: block upstream update ---
+  process.stderr.write(
+    `⚠️  此为 ClawCode runtime 分支，不支持 openclaw update。\n` +
+      `    升级方式：\n` +
+      `    1. 备份：tar -czf ~/.openclaw-backup-$(date +%Y%m%d).tgz ~/.openclaw\n` +
+      `    2. 拉取：cd <安装目录> && git pull --ff-only && pnpm install && pnpm build\n` +
+      `    3. 检查：openclaw doctor --non-interactive\n` +
+      `    详见：https://github.com/Jackwwg83/clawcode\n`,
+  );
+  defaultRuntime.exit(1);
+  return; // 防止 mock 环境下 exit 不终止进程导致继续执行
+  // --- end ClawCode guard ---
+
   suppressDeprecations();
 
   const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;

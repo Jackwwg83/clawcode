@@ -31,6 +31,10 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   outro: (message: string) => void;
 }) {
+  // --- ClawCode runtime fork: skip update check ---
+  return { updated: false };
+  // --- end ClawCode guard ---
+
   const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
   const canOfferUpdate =
     !updateInProgress &&

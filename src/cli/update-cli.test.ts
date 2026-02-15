@@ -182,33 +182,6 @@ describe("update-cli", () => {
     expect(typeof updateWizardCommand).toBe("function");
   }, 20_000);
 
-  it("updateCommand runs update and outputs result", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      root: "/test/path",
-      before: { sha: "abc123", version: "1.0.0" },
-      after: { sha: "def456", version: "1.0.1" },
-      steps: [
-        {
-          name: "git fetch",
-          command: "git fetch",
-          cwd: "/test/path",
-          durationMs: 100,
-          exitCode: 0,
-        },
-      ],
-      durationMs: 500,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-
-    await updateCommand({ json: false });
-
-    expect(runGatewayUpdate).toHaveBeenCalled();
-    expect(defaultRuntime.log).toHaveBeenCalled();
-  });
-
   it("updateStatusCommand prints table output", async () => {
     await updateStatusCommand({ json: false });
 
@@ -225,160 +198,374 @@ describe("update-cli", () => {
     expect(parsed.channel.value).toBe("stable");
   });
 
-  it("defaults to dev channel for git installs when unset", async () => {
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    });
-
-    await updateCommand({});
-
-    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-    expect(call?.channel).toBe("dev");
-  });
-
-  it("defaults to stable channel for package installs when unset", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
-
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: tempDir,
-      installKind: "package",
-      packageManager: "npm",
-      deps: {
-        manager: "npm",
+  // --- ClawCode: 以下测试被 skip，因为 ClawCode 守卫有意阻止所有 update 操作 ---
+  describe.skip("upstream update tests (blocked by ClawCode guard)", () => {
+    it("updateCommand runs update and outputs result", async () => {
+      const mockResult: UpdateRunResult = {
         status: "ok",
-        lockfilePath: null,
-        markerPath: null,
-      },
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
+        mode: "git",
+        root: "/test/path",
+        before: { sha: "abc123", version: "1.0.0" },
+        after: { sha: "def456", version: "1.0.1" },
+        steps: [
+          {
+            name: "git fetch",
+            command: "git fetch",
+            cwd: "/test/path",
+            durationMs: 100,
+            exitCode: 0,
+          },
+        ],
+        durationMs: 500,
+      };
 
-    await updateCommand({ yes: true });
+      vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
 
-    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-    expect(call?.channel).toBe("stable");
-    expect(call?.tag).toBe("latest");
-  });
+      await updateCommand({ json: false });
 
-  it("uses stored beta channel when configured", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      config: { update: { channel: "beta" } },
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
+      expect(runGatewayUpdate).toHaveBeenCalled();
+      expect(defaultRuntime.log).toHaveBeenCalled();
     });
 
-    await updateCommand({});
-
-    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-    expect(call?.channel).toBe("beta");
-  });
-
-  it("falls back to latest when beta tag is older than release", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
-
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      config: { update: { channel: "beta" } },
-    });
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: tempDir,
-      installKind: "package",
-      packageManager: "npm",
-      deps: {
-        manager: "npm",
+    it("defaults to dev channel for git installs when unset", async () => {
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
         status: "ok",
-        lockfilePath: null,
-        markerPath: null,
-      },
-    });
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "1.2.3-1",
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+      });
+
+      await updateCommand({});
+
+      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+      expect(call?.channel).toBe("dev");
     });
 
-    await updateCommand({});
+    it("defaults to stable channel for package installs when unset", async () => {
+      const tempDir = await createCaseDir("openclaw-update");
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        "utf-8",
+      );
 
-    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-    expect(call?.channel).toBe("beta");
-    expect(call?.tag).toBe("latest");
-  });
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: tempDir,
+        installKind: "package",
+        packageManager: "npm",
+        deps: {
+          manager: "npm",
+          status: "ok",
+          lockfilePath: null,
+          markerPath: null,
+        },
+      });
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "npm",
+        steps: [],
+        durationMs: 100,
+      });
 
-  it("honors --tag override", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+      await updateCommand({ yes: true });
 
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
+      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+      expect(call?.channel).toBe("stable");
+      expect(call?.tag).toBe("latest");
     });
 
-    await updateCommand({ tag: "next" });
+    it("uses stored beta channel when configured", async () => {
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+        ...baseSnapshot,
+        config: { update: { channel: "beta" } },
+      });
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+      });
 
-    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-    expect(call?.tag).toBe("next");
-  });
+      await updateCommand({});
 
-  it("updateCommand outputs JSON when --json is set", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
+      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+      expect(call?.channel).toBe("beta");
+    });
 
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(defaultRuntime.log).mockClear();
+    it("falls back to latest when beta tag is older than release", async () => {
+      const tempDir = await createCaseDir("openclaw-update");
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        "utf-8",
+      );
 
-    await updateCommand({ json: true });
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+        ...baseSnapshot,
+        config: { update: { channel: "beta" } },
+      });
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: tempDir,
+        installKind: "package",
+        packageManager: "npm",
+        deps: {
+          manager: "npm",
+          status: "ok",
+          lockfilePath: null,
+          markerPath: null,
+        },
+      });
+      vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+        tag: "latest",
+        version: "1.2.3-1",
+      });
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "npm",
+        steps: [],
+        durationMs: 100,
+      });
 
-    const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
-    const jsonOutput = logCalls.find((call) => {
+      await updateCommand({});
+
+      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+      expect(call?.channel).toBe("beta");
+      expect(call?.tag).toBe("latest");
+    });
+
+    it("honors --tag override", async () => {
+      const tempDir = await createCaseDir("openclaw-update");
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        "utf-8",
+      );
+
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "npm",
+        steps: [],
+        durationMs: 100,
+      });
+
+      await updateCommand({ tag: "next" });
+
+      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+      expect(call?.tag).toBe("next");
+    });
+
+    it("updateCommand outputs JSON when --json is set", async () => {
+      const mockResult: UpdateRunResult = {
+        status: "ok",
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+      };
+
+      vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+      vi.mocked(defaultRuntime.log).mockClear();
+
+      await updateCommand({ json: true });
+
+      const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
+      const jsonOutput = logCalls.find((call) => {
+        try {
+          JSON.parse(call[0] as string);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      expect(jsonOutput).toBeDefined();
+    });
+
+    it("updateCommand restarts daemon by default", async () => {
+      const mockResult: UpdateRunResult = {
+        status: "ok",
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+      };
+
+      vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+      vi.mocked(runDaemonRestart).mockResolvedValue(true);
+
+      await updateCommand({});
+
+      expect(runDaemonRestart).toHaveBeenCalled();
+    });
+
+    it("updateCommand validates timeout option", async () => {
+      vi.mocked(defaultRuntime.error).mockClear();
+      vi.mocked(defaultRuntime.exit).mockClear();
+
+      await updateCommand({ timeout: "invalid" });
+
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("persists update channel when --channel is set", async () => {
+      const mockResult: UpdateRunResult = {
+        status: "ok",
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+      };
+
+      vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+
+      await updateCommand({ channel: "beta" });
+
+      expect(writeConfigFile).toHaveBeenCalled();
+      const call = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
+        update?: { channel?: string };
+      };
+      expect(call?.update?.channel).toBe("beta");
+    });
+
+    it("requires confirmation on downgrade when non-interactive", async () => {
+      const tempDir = await createCaseDir("openclaw-update");
+      setTty(false);
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+        "utf-8",
+      );
+
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: tempDir,
+        installKind: "package",
+        packageManager: "npm",
+        deps: {
+          manager: "npm",
+          status: "ok",
+          lockfilePath: null,
+          markerPath: null,
+        },
+      });
+      vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+        tag: "latest",
+        version: "0.0.1",
+      });
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "npm",
+        steps: [],
+        durationMs: 100,
+      });
+      vi.mocked(defaultRuntime.error).mockClear();
+      vi.mocked(defaultRuntime.exit).mockClear();
+
+      await updateCommand({});
+
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Downgrade confirmation required."),
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("allows downgrade with --yes in non-interactive mode", async () => {
+      const tempDir = await createCaseDir("openclaw-update");
+      setTty(false);
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+        "utf-8",
+      );
+
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: tempDir,
+        installKind: "package",
+        packageManager: "npm",
+        deps: {
+          manager: "npm",
+          status: "ok",
+          lockfilePath: null,
+          markerPath: null,
+        },
+      });
+      vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+        tag: "latest",
+        version: "0.0.1",
+      });
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "npm",
+        steps: [],
+        durationMs: 100,
+      });
+      vi.mocked(defaultRuntime.error).mockClear();
+      vi.mocked(defaultRuntime.exit).mockClear();
+
+      await updateCommand({ yes: true });
+
+      expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("Downgrade confirmation required."),
+      );
+      expect(runGatewayUpdate).toHaveBeenCalled();
+    });
+
+    it("updateWizardCommand offers dev checkout and forwards selections", async () => {
+      const tempDir = await createCaseDir("openclaw-update-wizard");
+      const previousGitDir = process.env.OPENCLAW_GIT_DIR;
       try {
-        JSON.parse(call[0] as string);
-        return true;
-      } catch {
-        return false;
+        setTty(true);
+        process.env.OPENCLAW_GIT_DIR = tempDir;
+
+        vi.mocked(checkUpdateStatus).mockResolvedValue({
+          root: "/test/path",
+          installKind: "package",
+          packageManager: "npm",
+          deps: {
+            manager: "npm",
+            status: "ok",
+            lockfilePath: null,
+            markerPath: null,
+          },
+        });
+        select.mockResolvedValue("dev");
+        confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+        vi.mocked(runGatewayUpdate).mockResolvedValue({
+          status: "ok",
+          mode: "git",
+          steps: [],
+          durationMs: 100,
+        });
+
+        await updateWizardCommand({});
+
+        const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+        expect(call?.channel).toBe("dev");
+      } finally {
+        process.env.OPENCLAW_GIT_DIR = previousGitDir;
       }
     });
-    expect(jsonOutput).toBeDefined();
   });
+  // --- end ClawCode skip ---
+
+  // --- ClawCode: 守卫行为测试 ---
+  describe("ClawCode update guard", () => {
+    it("should block update with exit(1) and Chinese warning", async () => {
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await updateCommand({} as unknown as Parameters<typeof updateCommand>[0]);
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(stderrSpy).toHaveBeenCalled();
+        const output = stderrSpy.mock.calls.map((call) => String(call[0] ?? "")).join("");
+        expect(output).toContain("ClawCode");
+        expect(output).toContain("git pull");
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+  });
+  // --- end ClawCode guard test ---
 
   it("updateCommand exits with error on failure", async () => {
     const mockResult: UpdateRunResult = {
@@ -395,22 +582,6 @@ describe("update-cli", () => {
     await updateCommand({});
 
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("updateCommand restarts daemon by default", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
-
-    await updateCommand({});
-
-    expect(runDaemonRestart).toHaveBeenCalled();
   });
 
   it("updateCommand skips restart when --no-restart is set", async () => {
@@ -446,119 +617,6 @@ describe("update-cli", () => {
     expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(false);
   });
 
-  it("updateCommand validates timeout option", async () => {
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
-
-    await updateCommand({ timeout: "invalid" });
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("persists update channel when --channel is set", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-
-    await updateCommand({ channel: "beta" });
-
-    expect(writeConfigFile).toHaveBeenCalled();
-    const call = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
-      update?: { channel?: string };
-    };
-    expect(call?.update?.channel).toBe("beta");
-  });
-
-  it("requires confirmation on downgrade when non-interactive", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-    setTty(false);
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-      "utf-8",
-    );
-
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: tempDir,
-      installKind: "package",
-      packageManager: "npm",
-      deps: {
-        manager: "npm",
-        status: "ok",
-        lockfilePath: null,
-        markerPath: null,
-      },
-    });
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "0.0.1",
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
-
-    await updateCommand({});
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Downgrade confirmation required."),
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("allows downgrade with --yes in non-interactive mode", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-    setTty(false);
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-      "utf-8",
-    );
-
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: tempDir,
-      installKind: "package",
-      packageManager: "npm",
-      deps: {
-        manager: "npm",
-        status: "ok",
-        lockfilePath: null,
-        markerPath: null,
-      },
-    });
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "0.0.1",
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
-
-    await updateCommand({ yes: true });
-
-    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Downgrade confirmation required."),
-    );
-    expect(runGatewayUpdate).toHaveBeenCalled();
-  });
-
   it("updateWizardCommand requires a TTY", async () => {
     setTty(false);
     vi.mocked(defaultRuntime.error).mockClear();
@@ -570,41 +628,5 @@ describe("update-cli", () => {
       expect.stringContaining("Update wizard requires a TTY"),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = await createCaseDir("openclaw-update-wizard");
-    const previousGitDir = process.env.OPENCLAW_GIT_DIR;
-    try {
-      setTty(true);
-      process.env.OPENCLAW_GIT_DIR = tempDir;
-
-      vi.mocked(checkUpdateStatus).mockResolvedValue({
-        root: "/test/path",
-        installKind: "package",
-        packageManager: "npm",
-        deps: {
-          manager: "npm",
-          status: "ok",
-          lockfilePath: null,
-          markerPath: null,
-        },
-      });
-      select.mockResolvedValue("dev");
-      confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      vi.mocked(runGatewayUpdate).mockResolvedValue({
-        status: "ok",
-        mode: "git",
-        steps: [],
-        durationMs: 100,
-      });
-
-      await updateWizardCommand({});
-
-      const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-      expect(call?.channel).toBe("dev");
-    } finally {
-      process.env.OPENCLAW_GIT_DIR = previousGitDir;
-    }
   });
 });
