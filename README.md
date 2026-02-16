@@ -92,17 +92,9 @@ pnpm build
 ```bash
 # 启用 Claude SDK 运行时（必需）
 export CLAWCODE_RUNTIME=claude-sdk
-
-# Anthropic API 认证（二选一）
-# 方式 A：直接使用 API key
-export ANTHROPIC_API_KEY=sk-ant-xxx
-
-# 方式 B：使用 Claude Code CLI 的认证（通过 base URL + auth token）
-export ANTHROPIC_BASE_URL=https://api.anthropic.com
-export ANTHROPIC_AUTH_TOKEN=your-token
 ```
 
-> SDK 运行时会将完整的 `process.env` 传递给 Claude 子进程，确保认证配置被正确继承。
+SDK 运行时需要有效的 Anthropic API 认证。请参考 [Anthropic 官方文档](https://docs.anthropic.com/en/docs/initial-setup) 完成认证配置。
 
 ### 6. 启动
 
@@ -127,12 +119,11 @@ pnpm vitest run src/agents/claude-sdk-runner/__tests__/routing.test.ts
 
 ### 环境变量
 
-| 变量                   | 说明                              | 默认值                     |
-| ---------------------- | --------------------------------- | -------------------------- |
-| `CLAWCODE_RUNTIME`     | 运行时选择：`claude-sdk` 或不设置 | 不设置（使用 pi-embedded） |
-| `ANTHROPIC_API_KEY`    | Anthropic API Key                 | —                          |
-| `ANTHROPIC_BASE_URL`   | Anthropic API Base URL            | —                          |
-| `ANTHROPIC_AUTH_TOKEN` | Anthropic Auth Token              | —                          |
+| 变量               | 说明                              | 默认值                     |
+| ------------------ | --------------------------------- | -------------------------- |
+| `CLAWCODE_RUNTIME` | 运行时选择：`claude-sdk` 或不设置 | 不设置（使用 pi-embedded） |
+
+Anthropic API 认证相关的环境变量请参考 [Anthropic 官方文档](https://docs.anthropic.com/en/docs/initial-setup)。
 
 ### 运行时切换
 
@@ -219,7 +210,7 @@ NODE_OPTIONS="--max-old-space-size=1024" pnpm vitest run src/agents/claude-sdk-r
 - **只有 `pi-embedded.ts` 是路由修改点** — 所有新增逻辑都在 `claude-sdk-runner/` 目录，不要修改其他上游文件
 - **Update 保护不可移除** — 3 个 guard 文件防止意外被上游覆盖
 - **SDK 使用 `bypassPermissions`** — 权限控制由 OpenClaw hooks 层负责，SDK 层不做额外限制
-- **环境变量传递** — `options-builder.ts` 会将完整 `process.env` 传给 SDK 子进程
+- **环境变量传递** — SDK 子进程会继承当前 `process.env`
 
 ## 从 OpenClaw 上游同步
 
