@@ -1,0 +1,31 @@
+{
+  "payloads": [
+    {
+      "text": "我来读取 package.json 文件看看这个项目的信息。根据 package.json 文件，这个项目叫 **openclaw**（开放爪），是一个**多通道 AI 网关，具有可扩展的消息集成功能**（Multi-channel AI gateway with extensible messaging integrations）。\n\n**主要特点：**\n\n1. **多平台消息集成** - 支持多种通讯平台：\n   - Telegram (grammy)\n   - Slack\n   - Discord\n   - WhatsApp (baileys)\n   - Line\n   - 飞书/Lark\n\n2. **AI 能力** - 集成了多个 AI SDK：\n   - Anthropic Claude Agent SDK\n   - Agent Client Protocol SDK\n   - AWS Bedrock\n   - 支持本地模型（node-llama-cpp）\n\n3. **多端支持**：\n   - macOS/iOS 应用（Swift）\n   - Android 应用\n   - CLI 命令行工具\n   - TUI 终端界面\n   - Web UI（Lit 框架）\n\n4. **核心功能**：\n   - Agent 代理模式（支持 RPC）\n   - Gateway 网关模式\n   - 插件系统（plugin-sdk）\n   - 技能系统（skills）\n\n从 git 状态来看，这是从 openclaw 上游 fork 出来的，并添加了 **Claude Agent SDK 运行时覆盖层（ClawCode v0.1）**，说明这是一个基于 openclaw 定制的版本，专门增强了与 Claude Agent SDK 的集成。",
+      "mediaUrl": null
+    }
+  ],
+  "meta": {
+    "durationMs": 16590,
+    "agentMeta": {
+      "sessionId": "compare-T2-file-read-claude-sdk-1771228990",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "usage": {
+        "input": 9,
+        "output": 503,
+        "cacheRead": 32698,
+        "cacheWrite": 10208,
+        "total": 512
+      },
+      "lastCallUsage": {
+        "input": 9,
+        "output": 503,
+        "cacheRead": 32698,
+        "cacheWrite": 10208,
+        "total": 512
+      },
+      "promptTokens": 9
+    }
+  }
+}

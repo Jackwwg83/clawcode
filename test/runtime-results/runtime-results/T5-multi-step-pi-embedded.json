@@ -1,0 +1,317 @@
+[tools] exec failed: /bin/bash: line 1: tree: command not found
+
+Command exited with code 127
+[agent/embedded] read tool called without path: toolCallId=toolu_01SdW9Ej8gz8k1SYRsE4xXyL argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_01GtYhi53LuTDEurdYrenv1P argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_01CL6ivAssU1rj1Cmz9DcCEf argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_01NwxRuE19975EFFFRu2n2P5 argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_01LXeBinHGcm8P3Y9HNxtnNV argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_012jm5KuY1bFB8hMCubXWGtK argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_011uFd9JzNMkSCGJ7ouZcBVR argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_01QcE3SFyBTTHnqvWS7cFjf1 argsType=object
+[tools] read failed: ENOENT: no such file or directory, access '/home/ubuntu/clawcode/docs/configuration.md'
+[agent/embedded] read tool called without path: toolCallId=toolu_015cM9GmZMmG3pTrn479MPaj argsType=object
+[agent/embedded] read tool called without path: toolCallId=toolu_018qBdYYeVegGjFRVgNiRefe argsType=object
+{
+  "payloads": [
+    {
+      "text": "我来帮你查看 `src/agents/` 目录下的文件，然后分析这个项目的 agent 架构。",
+      "mediaUrl": null
+    },
+    {
+      "text": "现在让我查看一些核心文件来了解架构：",
+      "mediaUrl": null
+    },
+    {
+      "text": "让我再看一下关键的运行器文件：",
+      "mediaUrl": null
+    },
+    {
+      "text": "现在让我查看一些配置文件来了解整体架构：",
+      "mediaUrl": null
+    },
+    {
+      "text": "完美！现在让我总结一下这个项目的 agent 架构。\n\n基于对 `src/agents/` 目录的分析和文档阅读，我可以为你详细介绍 **OpenClaw 的 Agent 架构**：\n\n## 📋 OpenClaw Agent 架构总览\n\n### 1️⃣ **核心架构层次**\n\nOpenClaw 的 agent 系统采用**多层架构**，主要包含：\n\n#### **核心层 (Core Runtime)**\n- **pi-embedded runner** (`pi-embedded-runner/`): 基于 pi-mono 的核心运行时引擎\n  - `run.ts`: 主运行循环，处理消息和工具调用\n  - `compact.ts`: 上下文压缩（当令牌超限时）\n  - `google.ts`: Google 模型专用处理\n  - `tool-result-truncation.ts`: 工具结果截断\n  \n- **Claude SDK runner** (`claude-sdk-runner/`): Anthropic 官方 SDK 的专用运行器（当 `CLAWCODE_RUNTIME=claude-sdk` 时使用）\n\n- **订阅系统** (`pi-embedded-subscribe.ts`): 流式响应处理\n  - 处理思考链 (`<thinking>`)、最终输出 (`<final>`)\n  - 支持 reasoning 模式 (off/on/stream)\n  - 块状回复 (block reply) 的分块和发送\n\n#### **Agent 隔离与多实例**\n- **agent-scope.ts**: Agent ID 解析和配置查找\n  - 支持多个独立 agent (`agents.list`)\n  - 每个 agent 有自己的 workspace、agentDir、sessions\n  - 路由规则：通过 `bindings` 将消息路由到特定 agent\n\n- **subagent 系统**:\n  - `subagent-registry.ts`: 子 agent 注册和生命周期管理\n  - `subagent-announce.ts`: 子任务完成后的通知流程\n  - 支持 `sessions_spawn` 工具来启动后台子任务\n\n### 2️⃣ **工具系统 (Tools)**\n\n工具层 (`tools/`) 提供了丰富的能力：\n\n**核心工具**:\n- `read/write/edit/apply_patch`: 文件操作（来自 pi-coding-agent）\n- `exec/process`: 命令执行和进程管理（`bash-tools.ts`）\n- `browser-tool.ts`: 浏览器控制\n- `canvas-tool.ts`: Canvas 展示和 UI 操作\n\n**通信工具**:\n- `discord-actions*.ts`: Discord 操作\n- `cron-tool.ts`: 定时任务和唤醒事件\n- `agents-list-tool.ts`: 列出可用 agents\n\n**工具策略与安全**:\n- `tool-policy.ts`: 基于 allowlist/denylist 的工具权限控制\n- `pi-tools.policy.ts`: 每个 agent/group 的工具策略解析\n- `tool-call-id.ts`: 工具调用唯一标识\n\n### 3️⃣ **模型与认证 (Model & Auth)**\n\n**模型管理**:\n- `model-catalog.ts`: 模型目录\n- `model-selection.ts`: 模型选择逻辑\n- `model-fallback.ts`: 模型失败后的降级\n- `models-config.ts`: 模型配置解析\n- 支持的提供商：`anthropic`, `openai`, `google`, `bedrock`, `ollama`, `together`, `huggingface`, `venice`, `minimax` 等\n\n**认证系统** (`auth-profiles/`):\n- `store.ts`: 认证配置存储\n- `order.ts`: 认证配置优先级排序\n- `oauth.ts`: OAuth 流程（Anthropic）\n- **每个 agent 有独立的 auth profiles**（存储在 `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`）\n\n### 4️⃣ **会话管理 (Session Management)**\n\n- **会话存储**: `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`\n- **会话锁**: `session-write-lock.ts` 防止并发写入\n- **会话修复**: `session-file-repair.ts`, `session-transcript-repair.ts`\n- **会话 key**: `agent:<agentId>:<sessionKey>` 格式\n  - Direct messages → `agent:<agentId>:<mainKey>`\n  - Group messages → `agent:<agentId>:group:<groupId>`\n\n### 5️⃣ **System Prompt 生成**\n\n`system-prompt.ts` 动态生成系统提示，包含：\n- **Skills**: 读取 workspace 下的 `skills/` 并注入可用技能列表\n- **Memory**: 集成 `memory_search` / `memory_get` 工具指引\n- **Context files**: 注入 `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`\n- **Runtime info**: 当前时间、模型、工具列表、工作目录\n- **Modes**: 支持 `full` / `minimal` / `none` 三种模式（main agent 用 full，subagent 用 minimal）\n\n### 6️⃣ **Workspace 与 Sandbox**\n\n- **Workspace**: 每个 agent 的工作目录（`agents.list[].workspace`）\n  - 包含 `AGENTS.md`, `SOUL.md`, `TOOLS.md` 等引导文件\n  - 包含 `skills/` 技能目录\n  - 包含 `memory/` 记忆文件\n\n- **Sandbox** (`sandbox.ts`, `sandbox/`):\n  - 可选的 Docker 容器隔离\n  - 支持 per-agent 或 shared 容器\n  - 工具路径映射到容器内路径\n\n### 7️⃣ **扩展系统 (Extensions)**\n\n`pi-extensions/`:\n- `context-pruning/`: 上下文修剪策略\n- `compaction-safeguard.ts`: 压缩安全保护\n\n### 8️⃣ **技能系统 (Skills)**\n\n`skills/`:\n- 从三个位置加载技能：\n  1. 内置技能（随安装包发布）\n  2. 管理技能：`~/.openclaw/skills`\n  3. Workspace 技能：`<workspace>/skills`\n- 技能文件结构：`<skill-dir>/SKILL.md` + 可选的脚本和资源\n- Skills 通过 `<available_skills>` 注入到 system prompt\n\n---\n\n## 🔑 **关键设计特点**\n\n1. **多 Agent 隔离**: 每个 agent 独立的 workspace/sessions/auth\n2. **灵活路由**: 通过 `bindings` 将不同的 channel/account/peer 路由到不同 agent\n3. **工具策略**: 细粒度的工具权限控制（per-agent、per-group、per-tool）\n4. **流式处理**: 支持 streaming、block replies、reasoning 模式\n5. **上下文管理**: 自动压缩 (compaction) 和上下文窗口保护\n6. **模型兼容**: 支持多种模型提供商，带有 provider-specific 的 schema 适配\n7. **Subagent 支持**: 可以 spawn 后台子任务并通知完成\n\n---\n\n## 📂 **目录结构快速参考**\n\n```\nsrc/agents/\n├── pi-embedded-runner/        # 核心运行时引擎\n├── claude-sdk-runner/         # Claude SDK 专用运行器\n├── tools/                     # 工具实现\n├── auth-profiles/             # 认证配置管理\n├── pi-extensions/             # 运行时扩展\n├── skills/                    # 技能加载器\n├── sandbox/                   # 沙箱实现\n├── agent-scope.ts             # Agent 配置解析\n├── subagent-*.ts              # 子 agent 管理\n├── system-prompt.ts           # 系统提示生成\n├── pi-tools.ts                # 工具注册与策略\n├── model-*.ts                 # 模型管理\n├── bash-tools.ts              # 命令执行工具\n└── session-*.ts               # 会话管理\n```\n\n希望这个总览对你理解 OpenClaw 的 agent 架构有帮助！如果你想深入了解某个具体模块，随时告诉我 🦞",
+      "mediaUrl": null
+    }
+  ],
+  "meta": {
+    "durationMs": 102572,
+    "agentMeta": {
+      "sessionId": "compare-T5-multi-step-pi-embedded-1771229125",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "usage": {
+        "input": 91,
+        "output": 3857,
+        "cacheRead": 518585,
+        "cacheWrite": 23581,
+        "total": 546114
+      },
+      "lastCallUsage": {
+        "input": 4,
+        "output": 2384,
+        "cacheRead": 36603,
+        "cacheWrite": 3626,
+        "total": 42617
+      },
+      "promptTokens": 40233
+    },
+    "aborted": false,
+    "systemPromptReport": {
+      "source": "run",
+      "generatedAt": 1771229128767,
+      "sessionId": "compare-T5-multi-step-pi-embedded-1771229125",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "workspaceDir": "/home/ubuntu/clawcode",
+      "bootstrapMaxChars": 20000,
+      "sandbox": {
+        "mode": "off",
+        "sandboxed": false
+      },
+      "systemPrompt": {
+        "chars": 32878,
+        "projectContextChars": 21630,
+        "nonProjectContextChars": 11248
+      },
+      "injectedWorkspaceFiles": [
+        {
+          "name": "AGENTS.md",
+          "path": "/home/ubuntu/clawcode/AGENTS.md",
+          "missing": false,
+          "rawChars": 17571,
+          "injectedChars": 17571,
+          "truncated": false
+        },
+        {
+          "name": "SOUL.md",
+          "path": "/home/ubuntu/clawcode/SOUL.md",
+          "missing": false,
+          "rawChars": 1664,
+          "injectedChars": 1664,
+          "truncated": false
+        },
+        {
+          "name": "TOOLS.md",
+          "path": "/home/ubuntu/clawcode/TOOLS.md",
+          "missing": false,
+          "rawChars": 850,
+          "injectedChars": 850,
+          "truncated": false
+        },
+        {
+          "name": "IDENTITY.md",
+          "path": "/home/ubuntu/clawcode/IDENTITY.md",
+          "missing": false,
+          "rawChars": 633,
+          "injectedChars": 633,
+          "truncated": false
+        },
+        {
+          "name": "USER.md",
+          "path": "/home/ubuntu/clawcode/USER.md",
+          "missing": false,
+          "rawChars": 474,
+          "injectedChars": 474,
+          "truncated": false
+        },
+        {
+          "name": "HEARTBEAT.md",
+          "path": "/home/ubuntu/clawcode/HEARTBEAT.md",
+          "missing": true,
+          "rawChars": 0,
+          "injectedChars": 57,
+          "truncated": false
+        },
+        {
+          "name": "BOOTSTRAP.md",
+          "path": "/home/ubuntu/clawcode/BOOTSTRAP.md",
+          "missing": true,
+          "rawChars": 0,
+          "injectedChars": 57,
+          "truncated": false
+        }
+      ],
+      "skills": {
+        "promptChars": 3222,
+        "entries": [
+          {
+            "name": "coding-agent",
+            "blockChars": 261
+          },
+          {
+            "name": "healthcheck",
+            "blockChars": 473
+          },
+          {
+            "name": "skill-creator",
+            "blockChars": 278
+          },
+          {
+            "name": "tmux",
+            "blockChars": 237
+          },
+          {
+            "name": "weather",
+            "blockChars": 202
+          },
+          {
+            "name": "merge-pr",
+            "blockChars": 347
+          },
+          {
+            "name": "mintlify",
+            "blockChars": 312
+          },
+          {
+            "name": "prepare-pr",
+            "blockChars": 354
+          },
+          {
+            "name": "review-pr",
+            "blockChars": 365
+          }
+        ]
+      },
+      "tools": {
+        "listChars": 1926,
+        "schemaChars": 14669,
+        "entries": [
+          {
+            "name": "read",
+            "summaryChars": 298,
+            "schemaChars": 392,
+            "propertiesCount": 4
+          },
+          {
+            "name": "edit",
+            "summaryChars": 129,
+            "schemaChars": 591,
+            "propertiesCount": 6
+          },
+          {
+            "name": "write",
+            "summaryChars": 127,
+            "schemaChars": 313,
+            "propertiesCount": 3
+          },
+          {
+            "name": "exec",
+            "summaryChars": 181,
+            "schemaChars": 1037,
+            "propertiesCount": 12
+          },
+          {
+            "name": "process",
+            "summaryChars": 85,
+            "schemaChars": 844,
+            "propertiesCount": 11
+          },
+          {
+            "name": "browser",
+            "summaryChars": 1251,
+            "schemaChars": 1869,
+            "propertiesCount": 28
+          },
+          {
+            "name": "canvas",
+            "summaryChars": 106,
+            "schemaChars": 661,
+            "propertiesCount": 18
+          },
+          {
+            "name": "nodes",
+            "summaryChars": 101,
+            "schemaChars": 1479,
+            "propertiesCount": 33
+          },
+          {
+            "name": "cron",
+            "summaryChars": 2444,
+            "schemaChars": 581,
+            "propertiesCount": 13
+          },
+          {
+            "name": "message",
+            "summaryChars": 89,
+            "schemaChars": 3897,
+            "propertiesCount": 84
+          },
+          {
+            "name": "tts",
+            "summaryChars": 129,
+            "schemaChars": 223,
+            "propertiesCount": 2
+          },
+          {
+            "name": "gateway",
+            "summaryChars": 354,
+            "schemaChars": 465,
+            "propertiesCount": 11
+          },
+          {
+            "name": "agents_list",
+            "summaryChars": 72,
+            "schemaChars": 33,
+            "propertiesCount": 0
+          },
+          {
+            "name": "sessions_list",
+            "summaryChars": 54,
+            "schemaChars": 176,
+            "propertiesCount": 4
+          },
+          {
+            "name": "sessions_history",
+            "summaryChars": 36,
+            "schemaChars": 149,
+            "propertiesCount": 3
+          },
+          {
+            "name": "sessions_send",
+            "summaryChars": 84,
+            "schemaChars": 203,
+            "propertiesCount": 5
+          },
+          {
+            "name": "sessions_spawn",
+            "summaryChars": 107,
+            "schemaChars": 312,
+            "propertiesCount": 8
+          },
+          {
+            "name": "session_status",
+            "summaryChars": 207,
+            "schemaChars": 89,
+            "propertiesCount": 2
+          },
+          {
+            "name": "web_search",
+            "summaryChars": 175,
+            "schemaChars": 728,
+            "propertiesCount": 6
+          },
+          {
+            "name": "web_fetch",
+            "summaryChars": 129,
+            "schemaChars": 360,
+            "propertiesCount": 3
+          },
+          {
+            "name": "memory_search",
+            "summaryChars": 235,
+            "schemaChars": 139,
+            "propertiesCount": 3
+          },
+          {
+            "name": "memory_get",
+            "summaryChars": 151,
+            "schemaChars": 128,
+            "propertiesCount": 3
+          }
+        ]
+      }
+    }
+  }
+}
