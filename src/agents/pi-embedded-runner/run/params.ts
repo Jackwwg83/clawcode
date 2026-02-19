@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
+import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
 
@@ -59,6 +60,8 @@ export type RunEmbeddedPiAgentParams = {
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
+  /** Optional injected workspace context files (SOUL.md, AGENTS.md, etc.). */
+  contextFiles?: EmbeddedContextFile[];
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   images?: ImageContent[];
