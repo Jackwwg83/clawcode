@@ -27,4 +27,35 @@ describe("options-builder", () => {
     const denied = await canUseTool("Read", { file_path: "/etc/passwd" }, {} as never);
     expect(denied.behavior).toBe("deny");
   });
+
+  it("applies OpenClaw tool policy mappings to SDK built-ins", async () => {
+    const params = {
+      sessionId: "s",
+      sessionKey: "telegram:dm:alice",
+      sessionFile: "/tmp/s.jsonl",
+      workspaceDir: "/tmp/ws",
+      prompt: "hello",
+      timeoutMs: 30_000,
+      runId: "run",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      config: {
+        tools: {
+          allow: ["read"],
+        },
+      },
+    } as unknown as RunEmbeddedPiAgentParams;
+
+    const options = buildSdkOptions(params);
+    const canUseTool = options.canUseTool!;
+
+    const read = await canUseTool("Read", { file_path: "notes/today.md" }, {} as never);
+    expect(read.behavior).toBe("allow");
+
+    const bash = await canUseTool("Bash", { command: "pwd" }, {} as never);
+    expect(bash.behavior).toBe("deny");
+
+    const webSearch = await canUseTool("WebSearch", { query: "latest news" }, {} as never);
+    expect(webSearch.behavior).toBe("deny");
+  });
 });

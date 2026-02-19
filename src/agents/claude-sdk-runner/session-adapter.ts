@@ -3,21 +3,17 @@ import type {
   SDKUserMessage,
   NonNullableUsage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
-import { getHistoryLimitFromSessionKey } from "../pi-embedded-runner/history.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../pi-embedded-runner/history.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
-
-const MAX_HISTORY_MESSAGES = 24;
-const MAX_HISTORY_CHARS = 12_000;
 
 type SessionBranchEntry = {
   type: string;
   message?: { role?: string; content?: unknown };
 };
-
-type TranscriptTurn = { role: "user" | "assistant"; text: string };
 
 type SessionUsage = {
   input: number;
@@ -130,7 +126,7 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
   try {
     const sessionManager = SessionManager.open(params.sessionFile);
     const branch = sessionManager.getBranch() as SessionBranchEntry[];
-    const turns: TranscriptTurn[] = [];
+    const messages: AgentMessage[] = [];
     for (const entry of branch) {
       if (entry.type !== "message") {
         continue;
@@ -143,21 +139,32 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
       if (!text) {
         continue;
       }
-      turns.push({
+      messages.push({
         role: role as "user" | "assistant",
-        text,
-      });
+        content: [{ type: "text", text }],
+        timestamp: Date.now(),
+      } as unknown as AgentMessage);
     }
 
-    if (turns.length === 0) {
+    if (messages.length === 0) {
       return [];
     }
 
     const historyLimit = resolveHistoryLimit(params);
-    const limitedTurns = limitHistoryTurnsByUserCount(turns, historyLimit);
-    let trimmed = limitedTurns
-      .slice(-MAX_HISTORY_MESSAGES)
-      .map((turn) => `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`);
+    const limitedMessages = limitHistoryTurns(messages, historyLimit);
+    let trimmed = limitedMessages
+      .map((message) => {
+        if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) {
+          return "";
+        }
+        const content = (message as { content?: unknown }).content;
+        const text = typeof content === "string" ? content.trim() : extractTextFromContent(content);
+        if (!text) {
+          return "";
+        }
+        return `${message.role === "user" ? "User" : "Assistant"}: ${text}`;
+      })
+      .filter(Boolean);
     const currentPrompt = params.prompt.trim();
     if (currentPrompt) {
       const duplicateTail = `User: ${currentPrompt}`;
@@ -169,21 +176,7 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
     if (trimmed.length === 0) {
       return [];
     }
-
-    const capped: string[] = [];
-    let usedChars = 0;
-    for (let i = trimmed.length - 1; i >= 0; i -= 1) {
-      const line = trimmed[i];
-      if (usedChars + line.length > MAX_HISTORY_CHARS) {
-        if (capped.length === 0) {
-          capped.unshift(line.slice(-MAX_HISTORY_CHARS));
-        }
-        break;
-      }
-      capped.unshift(line);
-      usedChars += line.length;
-    }
-    return capped;
+    return trimmed;
   } catch {
     return [];
   }
@@ -192,27 +185,6 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
 function resolveHistoryLimit(params: RunEmbeddedPiAgentParams): number | undefined {
   const sessionKey = params.sessionKey ?? params.sessionId;
   return getHistoryLimitFromSessionKey(sessionKey, params.config);
-}
-
-function limitHistoryTurnsByUserCount(
-  turns: TranscriptTurn[],
-  historyLimit: number | undefined,
-): TranscriptTurn[] {
-  if (!historyLimit || historyLimit <= 0) {
-    return turns;
-  }
-  let userCount = 0;
-  let start = turns.length;
-  for (let i = turns.length - 1; i >= 0; i -= 1) {
-    if (turns[i].role === "user") {
-      userCount += 1;
-      if (userCount > historyLimit) {
-        return turns.slice(start);
-      }
-      start = i;
-    }
-  }
-  return turns;
 }
 
 function extractTextFromContent(content: unknown): string {

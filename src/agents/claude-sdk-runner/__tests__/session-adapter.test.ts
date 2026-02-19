@@ -69,6 +69,58 @@ describe("claude-sdk session adapter", () => {
     expect(prompt).toContain("User: new question");
   });
 
+  it("respects channel historyLimit when building prompt context", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-sdk-session-history-limit-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+
+    const manager = SessionManager.open(sessionFile);
+    manager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "old user" }],
+    });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "old assistant" }],
+    });
+    manager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "latest user" }],
+    });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "latest assistant" }],
+    });
+
+    const prompt = buildSdkPrompt({
+      sessionId: "test-session",
+      sessionKey: "telegram:dm:alice",
+      sessionFile,
+      workspaceDir: tempDir,
+      prompt: "new question",
+      timeoutMs: 30_000,
+      runId: "test-run",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      config: {
+        channels: {
+          telegram: {
+            dmHistoryLimit: 1,
+          },
+        },
+      },
+    } as unknown as RunEmbeddedPiAgentParams);
+
+    expect(typeof prompt).toBe("string");
+    if (typeof prompt !== "string") {
+      throw new Error("expected string prompt");
+    }
+    expect(prompt).not.toContain("User: old user");
+    expect(prompt).not.toContain("Assistant: old assistant");
+    expect(prompt).toContain("User: latest user");
+    expect(prompt).toContain("Assistant: latest assistant");
+  });
+
   it("persists user and assistant turns to session transcript", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-sdk-session-persist-"));
     tempDirs.push(tempDir);

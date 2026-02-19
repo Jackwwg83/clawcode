@@ -1,5 +1,14 @@
 import path from "node:path";
+import type { SandboxToolPolicy } from "../sandbox.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  isToolAllowedByPolicies,
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicy,
+} from "../pi-tools.policy.js";
+import { resolveToolProfilePolicy } from "../tool-policy.js";
 
 type SdkOptions = import("@anthropic-ai/claude-agent-sdk").Options;
 type PermissionResult = import("@anthropic-ai/claude-agent-sdk").PermissionResult;
@@ -63,7 +72,7 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
     env: { ...process.env },
 
     // Enforce OpenClaw workspace boundary in SDK tool permissions.
-    canUseTool: createToolPermissionGuard({ workspaceDir: agentCwd }),
+    canUseTool: createToolPermissionGuard({ workspaceDir: agentCwd, params }),
 
     // Phase 3: 启用 SDK 内置工具（移除 Phase 1b 的 disallowedTools）
     // 如果 OpenClaw 明确禁用了工具，则在 SDK 侧也禁用
@@ -103,9 +112,17 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
   return options;
 }
 
-function createToolPermissionGuard(params: { workspaceDir: string }): CanUseTool {
+function createToolPermissionGuard(params: {
+  workspaceDir: string;
+  params: RunEmbeddedPiAgentParams;
+}): CanUseTool {
   const workspaceRoot = path.resolve(params.workspaceDir);
+  const toolPolicies = resolveSdkToolPolicies(params.params);
   return async (toolName, input, options): Promise<PermissionResult> => {
+    if (!isSdkToolAllowed(toolName, toolPolicies)) {
+      return deny(`Tool "${toolName}" blocked by OpenClaw tool policy.`);
+    }
+
     const blockedPath = typeof options.blockedPath === "string" ? options.blockedPath : undefined;
     if (blockedPath && !isPathWithinWorkspace(blockedPath, workspaceRoot)) {
       return deny(`Tool "${toolName}" cannot access path outside workspace: ${blockedPath}`);
@@ -203,6 +220,118 @@ function touchesRestrictedRoot(command: string): boolean {
     lowered.includes("/etc/") ||
     lowered.includes("/root/")
   );
+}
+
+function resolveSdkToolPolicies(
+  params: RunEmbeddedPiAgentParams,
+): Array<SandboxToolPolicy | undefined> {
+  const {
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    modelProvider: params.provider,
+    modelId: params.model,
+  });
+
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    spawnedBy: params.spawnedBy,
+    messageProvider: params.messageProvider,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    accountId: params.agentAccountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const subagentPolicy =
+    isSubagentSessionKey(params.sessionKey) && params.sessionKey
+      ? resolveSubagentToolPolicy(params.config)
+      : undefined;
+
+  const profilePolicy = mergeAlsoAllow(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const providerProfilePolicy = mergeAlsoAllow(
+    resolveToolProfilePolicy(providerProfile),
+    providerProfileAlsoAllow,
+  );
+
+  return [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    subagentPolicy,
+  ];
+}
+
+function mergeAlsoAllow(
+  policy: { allow?: string[]; deny?: string[] } | undefined,
+  alsoAllow?: string[],
+): SandboxToolPolicy | undefined {
+  if (!Array.isArray(alsoAllow) || alsoAllow.length === 0) {
+    return policy;
+  }
+  if (!policy?.allow || policy.allow.length === 0) {
+    return {
+      allow: Array.from(new Set(["*", ...alsoAllow])),
+      deny: policy?.deny,
+    };
+  }
+  return {
+    ...policy,
+    allow: Array.from(new Set([...policy.allow, ...alsoAllow])),
+  };
+}
+
+function isSdkToolAllowed(
+  toolName: string,
+  policies: Array<SandboxToolPolicy | undefined>,
+): boolean {
+  const mappedNames = mapSdkToolNameToPolicyNames(toolName);
+  if (mappedNames.length === 0) {
+    // Unknown SDK-native tools are not mapped to OpenClaw policy names yet.
+    return true;
+  }
+  return mappedNames.every((name) => isToolAllowedByPolicies(name, policies));
+}
+
+function mapSdkToolNameToPolicyNames(toolName: string): string[] {
+  const normalized = toolName.trim().toLowerCase();
+  switch (normalized) {
+    case "bash":
+      return ["exec"];
+    case "read":
+      return ["read"];
+    case "edit":
+      return ["edit"];
+    case "write":
+      return ["write"];
+    case "glob":
+    case "grep":
+      return ["read"];
+    case "notebookedit":
+      return ["edit", "write"];
+    case "webfetch":
+      return ["web_fetch"];
+    case "websearch":
+      return ["web_search"];
+    default:
+      return [];
+  }
 }
 
 function allow(): PermissionResult {
