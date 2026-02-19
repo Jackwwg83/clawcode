@@ -30,7 +30,7 @@ struct WideAreaGatewayDiscoveryTests {
                     return "0 0 18789 steipetacstudio.openclaw.internal."
                 }
                 if recordType == "TXT" {
-                    return "\"displayName=Peter\\226\\128\\153s Mac Studio (OpenClaw)\" \"gatewayPort=18789\" \"tailnetDns=peters-mac-studio-1.sheep-coho.ts.net\" \"cliPath=/Users/steipete/openclaw/src/entry.ts\""
+                    return "\"displayName=Peter\\226\\128\\153s Mac Studio (OpenClaw)\" \"gatewayPort=18789\" \"tailnetDns=gateway-host.example.ts.net\" \"cliPath=/Users/exampleuser/openclaw/src/entry.ts\""
                 }
                 return ""
             })
@@ -45,7 +45,7 @@ struct WideAreaGatewayDiscoveryTests {
         #expect(beacon.displayName == expectedDisplay)
         #expect(beacon.port == 18789)
         #expect(beacon.gatewayPort == 18789)
-        #expect(beacon.tailnetDns == "peters-mac-studio-1.sheep-coho.ts.net")
-        #expect(beacon.cliPath == "/Users/steipete/openclaw/src/entry.ts")
+        #expect(beacon.tailnetDns == "gateway-host.example.ts.net")
+        #expect(beacon.cliPath == "/Users/exampleuser/openclaw/src/entry.ts")
     }
 }

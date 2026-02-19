@@ -361,7 +361,7 @@ extension InstancesStore {
     static func preview(instances: [InstanceInfo] = [
         InstanceInfo(
             id: "local",
-            host: "steipete-mac",
+            host: "gateway-local-host",
             ip: "10.0.0.12",
             version: "1.2.3",
             platform: "macos 26.2.0",
@@ -370,7 +370,7 @@ extension InstancesStore {
             lastInputSeconds: 12,
             mode: "local",
             reason: "preview",
-            text: "Local node: steipete-mac (10.0.0.12) · app 1.2.3",
+            text: "Local node: gateway-local-host (10.0.0.12) · app 1.2.3",
             ts: Date().timeIntervalSince1970 * 1000),
         InstanceInfo(
             id: "gateway",

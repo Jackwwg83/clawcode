@@ -54,7 +54,7 @@ SOCKET="$SOCKET_DIR/openclaw-op.sock"
 SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
 
 tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op signin --account my.1password.com" Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op signin --account <your-1password-account>" Enter
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op whoami" Enter
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op vault list" Enter
 tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200

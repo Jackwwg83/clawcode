@@ -24,7 +24,7 @@
 - When working with documentation, read the mintlify skill.
 - Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
 - Doc headings and anchors: avoid em dashes and apostrophes in headings because they break Mintlify anchor links.
-- When Peter asks for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
+- When asked for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
 - When you touch docs, end the reply with the `https://docs.openclaw.ai/...` URLs you referenced.
 - README (GitHub): keep absolute docs URLs (`https://docs.openclaw.ai/...`) so links work on GitHub.
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
@@ -39,7 +39,7 @@
 
 ## exe.dev VM ops (general)
 
-- Access: stable path is `ssh exe.dev` then `ssh vm-name` (assume SSH key already set).
+- Access: stable path is `ssh <jump-host>` then `ssh <vm-host>` (assume SSH key already set).
 - SSH flaky: use exe.dev web terminal or Shelley (web agent); keep a tmux session for long ops.
 - Update: `sudo npm i -g openclaw@latest` (global install needs root on `/usr/lib/node_modules`).
 - Config: use `openclaw config set ...`; ensure `gateway.mode=local` is set.
@@ -128,7 +128,7 @@
 - Vocabulary: "makeup" = "mac app".
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
 - When adding a new `AGENTS.md` anywhere in the repo, also add a `CLAUDE.md` symlink pointing to it (example: `ln -s AGENTS.md CLAUDE.md`).
-- Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.
+- Signal: "update fly" => `fly ssh console -a <app-name> -C "bash -lc 'cd /data/app/openclaw && git pull --rebase origin main'"` then `fly machines restart <machine-id> -a <app-name>`.
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
 - Never update the Carbon dependency.
@@ -177,8 +177,8 @@
 ## NPM + 1Password (publish/verify)
 
 - Use the 1password skill; all `op` commands must run inside a fresh tmux session.
-- Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
-- OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
+- Sign in: `eval "$(op signin --account <your-1password-account>)"` (app unlocked + integration on).
+- OTP: `op read 'op://<vault>/<item>/one-time password?attribute=otp'`.
 - Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
 - Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
 - Kill the tmux session after publish.

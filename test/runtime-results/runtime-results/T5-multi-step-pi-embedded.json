@@ -9,7 +9,7 @@ Command exited with code 127
 [agent/embedded] read tool called without path: toolCallId=toolu_012jm5KuY1bFB8hMCubXWGtK argsType=object
 [agent/embedded] read tool called without path: toolCallId=toolu_011uFd9JzNMkSCGJ7ouZcBVR argsType=object
 [agent/embedded] read tool called without path: toolCallId=toolu_01QcE3SFyBTTHnqvWS7cFjf1 argsType=object
-[tools] read failed: ENOENT: no such file or directory, access '/home/ubuntu/clawcode/docs/configuration.md'
+[tools] read failed: ENOENT: no such file or directory, access '/home/<user>/clawcode/docs/configuration.md'
 [agent/embedded] read tool called without path: toolCallId=toolu_015cM9GmZMmG3pTrn479MPaj argsType=object
 [agent/embedded] read tool called without path: toolCallId=toolu_018qBdYYeVegGjFRVgNiRefe argsType=object
 {
@@ -64,7 +64,7 @@ Command exited with code 127
       "sessionId": "compare-T5-multi-step-pi-embedded-1771229125",
       "provider": "anthropic",
       "model": "claude-sonnet-4-5-20250929",
-      "workspaceDir": "/home/ubuntu/clawcode",
+      "workspaceDir": "/home/<user>/clawcode",
       "bootstrapMaxChars": 20000,
       "sandbox": {
         "mode": "off",
@@ -78,7 +78,7 @@ Command exited with code 127
       "injectedWorkspaceFiles": [
         {
           "name": "AGENTS.md",
-          "path": "/home/ubuntu/clawcode/AGENTS.md",
+          "path": "/home/<user>/clawcode/AGENTS.md",
           "missing": false,
           "rawChars": 17571,
           "injectedChars": 17571,
@@ -86,7 +86,7 @@ Command exited with code 127
         },
         {
           "name": "SOUL.md",
-          "path": "/home/ubuntu/clawcode/SOUL.md",
+          "path": "/home/<user>/clawcode/SOUL.md",
           "missing": false,
           "rawChars": 1664,
           "injectedChars": 1664,
@@ -94,7 +94,7 @@ Command exited with code 127
         },
         {
           "name": "TOOLS.md",
-          "path": "/home/ubuntu/clawcode/TOOLS.md",
+          "path": "/home/<user>/clawcode/TOOLS.md",
           "missing": false,
           "rawChars": 850,
           "injectedChars": 850,
@@ -102,7 +102,7 @@ Command exited with code 127
         },
         {
           "name": "IDENTITY.md",
-          "path": "/home/ubuntu/clawcode/IDENTITY.md",
+          "path": "/home/<user>/clawcode/IDENTITY.md",
           "missing": false,
           "rawChars": 633,
           "injectedChars": 633,
@@ -110,7 +110,7 @@ Command exited with code 127
         },
         {
           "name": "USER.md",
-          "path": "/home/ubuntu/clawcode/USER.md",
+          "path": "/home/<user>/clawcode/USER.md",
           "missing": false,
           "rawChars": 474,
           "injectedChars": 474,
@@ -118,7 +118,7 @@ Command exited with code 127
         },
         {
           "name": "HEARTBEAT.md",
-          "path": "/home/ubuntu/clawcode/HEARTBEAT.md",
+          "path": "/home/<user>/clawcode/HEARTBEAT.md",
           "missing": true,
           "rawChars": 0,
           "injectedChars": 57,
@@ -126,7 +126,7 @@ Command exited with code 127
         },
         {
           "name": "BOOTSTRAP.md",
-          "path": "/home/ubuntu/clawcode/BOOTSTRAP.md",
+          "path": "/home/<user>/clawcode/BOOTSTRAP.md",
           "missing": true,
           "rawChars": 0,
           "injectedChars": 57,

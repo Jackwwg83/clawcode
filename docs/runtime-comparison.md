@@ -59,8 +59,8 @@ ClawCode 在 OpenClaw 的 agent 执行层引入了 **Claude Agent SDK** 作为�
 
 ### 3.1 环境
 
-- **机器：** VM (ubuntu@54.169.224.161, ssh alias: clawcode)
-- **实例：** 同一 ClawCode 实例，同一 API 代理 (http://18.141.210.162:3000/api)
+- **机器：** VM (user@gateway-host, ssh alias: clawcode)
+- **实例：** 同一 ClawCode 实例，同一 API 代理 (http://api.example.com/v1)
 - **切换方式：** `CLAWCODE_RUNTIME` 环境变量
 - **模型：** 两个 runtime 使用同一模型 **claude-sonnet-4-5-20250929**
 
@@ -235,14 +235,14 @@ ClawCode 在 OpenClaw 的 agent 执行层引入了 **Claude Agent SDK** 作为�
 ### A. 测试环境配置
 
 ```
-VM: ubuntu@54.169.224.161 (ssh clawcode)
+VM: user@gateway-host (ssh clawcode)
 OS: Ubuntu (Kernel 5.x)
 Node.js: v22.22.0
 pnpm: v10.28.2
 ClawCode: v2026.2.13 (commit 12bb078)
 SDK: @anthropic-ai/claude-agent-sdk v0.2.37
 Model: claude-sonnet-4-5-20250929
-API Proxy: http://18.141.210.162:3000/api
+API Proxy: http://api.example.com/v1
 ```
 
 ### B. 运行命令

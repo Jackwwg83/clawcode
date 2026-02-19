@@ -66,7 +66,7 @@ struct GatewayDiscoveryModelTests {
 
     @Test func serviceNameDoesNotFalsePositiveOnSubstringHostToken() {
         let local = GatewayDiscoveryModel.LocalIdentity(
-            hostTokens: ["steipete"],
+            hostTokens: ["exampleuser"],
             displayTokens: [])
         #expect(!GatewayDiscoveryModel.isLocalGateway(
             lanHost: nil,
@@ -78,20 +78,20 @@ struct GatewayDiscoveryModelTests {
             lanHost: nil,
             tailnetDns: nil,
             displayName: nil,
-            serviceName: "steipete (OpenClaw)",
+            serviceName: "exampleuser (OpenClaw)",
             local: local))
     }
 
     @Test func parsesGatewayTXTFields() {
         let parsed = GatewayDiscoveryModel.parseGatewayTXT([
             "lanHost": "  studio.local  ",
-            "tailnetDns": "  peters-mac-studio-1.ts.net  ",
+            "tailnetDns": "  gateway-host.ts.net  ",
             "sshPort": " 2222 ",
             "gatewayPort": " 18799 ",
             "cliPath": " /opt/openclaw ",
         ])
         #expect(parsed.lanHost == "studio.local")
-        #expect(parsed.tailnetDns == "peters-mac-studio-1.ts.net")
+        #expect(parsed.tailnetDns == "gateway-host.ts.net")
         #expect(parsed.sshPort == 2222)
         #expect(parsed.gatewayPort == 18799)
         #expect(parsed.cliPath == "/opt/openclaw")

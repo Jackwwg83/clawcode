@@ -393,20 +393,20 @@ describe("doctor command", () => {
       parsed: {},
       valid: true,
       config: {
-        agents: { defaults: { workspace: "/Users/steipete/openclaw" } },
+        agents: { defaults: { workspace: "/Users/exampleuser/openclaw" } },
       },
       issues: [],
       legacyIssues: [],
     });
 
     note.mockClear();
-    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/Users/steipete");
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/Users/exampleuser");
     const realExists = fs.existsSync;
-    const legacyPath = path.join("/Users/steipete", "openclaw");
+    const legacyPath = path.join("/Users/exampleuser", "openclaw");
     const legacyAgentsPath = path.join(legacyPath, "AGENTS.md");
     const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
       if (
-        value === "/Users/steipete/openclaw" ||
+        value === "/Users/exampleuser/openclaw" ||
         value === legacyPath ||
         value === legacyAgentsPath
       ) {

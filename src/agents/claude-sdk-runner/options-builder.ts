@@ -199,7 +199,7 @@ function touchesRestrictedRoot(command: string): boolean {
   const lowered = command.toLowerCase();
   return (
     lowered.includes("/.openclaw") ||
-    lowered.includes("/home/ubuntu/clawcode") ||
+    lowered.includes("/home/<user>/clawcode") ||
     lowered.includes("/etc/") ||
     lowered.includes("/root/")
   );

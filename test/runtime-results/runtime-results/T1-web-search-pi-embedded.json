@@ -38,7 +38,7 @@
       "sessionId": "compare-T1-web-search-pi-embedded-1771228904",
       "provider": "anthropic",
       "model": "claude-sonnet-4-5-20250929",
-      "workspaceDir": "/home/ubuntu/clawcode",
+      "workspaceDir": "/home/<user>/clawcode",
       "bootstrapMaxChars": 20000,
       "sandbox": {
         "mode": "off",
@@ -52,7 +52,7 @@
       "injectedWorkspaceFiles": [
         {
           "name": "AGENTS.md",
-          "path": "/home/ubuntu/clawcode/AGENTS.md",
+          "path": "/home/<user>/clawcode/AGENTS.md",
           "missing": false,
           "rawChars": 17571,
           "injectedChars": 17571,
@@ -60,7 +60,7 @@
         },
         {
           "name": "SOUL.md",
-          "path": "/home/ubuntu/clawcode/SOUL.md",
+          "path": "/home/<user>/clawcode/SOUL.md",
           "missing": false,
           "rawChars": 1664,
           "injectedChars": 1664,
@@ -68,7 +68,7 @@
         },
         {
           "name": "TOOLS.md",
-          "path": "/home/ubuntu/clawcode/TOOLS.md",
+          "path": "/home/<user>/clawcode/TOOLS.md",
           "missing": false,
           "rawChars": 850,
           "injectedChars": 850,
@@ -76,7 +76,7 @@
         },
         {
           "name": "IDENTITY.md",
-          "path": "/home/ubuntu/clawcode/IDENTITY.md",
+          "path": "/home/<user>/clawcode/IDENTITY.md",
           "missing": false,
           "rawChars": 633,
           "injectedChars": 633,
@@ -84,7 +84,7 @@
         },
         {
           "name": "USER.md",
-          "path": "/home/ubuntu/clawcode/USER.md",
+          "path": "/home/<user>/clawcode/USER.md",
           "missing": false,
           "rawChars": 474,
           "injectedChars": 474,
@@ -92,7 +92,7 @@
         },
         {
           "name": "HEARTBEAT.md",
-          "path": "/home/ubuntu/clawcode/HEARTBEAT.md",
+          "path": "/home/<user>/clawcode/HEARTBEAT.md",
           "missing": true,
           "rawChars": 0,
           "injectedChars": 57,
@@ -100,7 +100,7 @@
         },
         {
           "name": "BOOTSTRAP.md",
-          "path": "/home/ubuntu/clawcode/BOOTSTRAP.md",
+          "path": "/home/<user>/clawcode/BOOTSTRAP.md",
           "missing": true,
           "rawChars": 0,
           "injectedChars": 57,
