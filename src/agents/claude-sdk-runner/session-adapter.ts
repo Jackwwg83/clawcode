@@ -4,7 +4,9 @@ import type {
   NonNullableUsage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
+import { getHistoryLimitFromSessionKey } from "../pi-embedded-runner/history.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 
 const MAX_HISTORY_MESSAGES = 24;
@@ -14,6 +16,8 @@ type SessionBranchEntry = {
   type: string;
   message?: { role?: string; content?: unknown };
 };
+
+type TranscriptTurn = { role: "user" | "assistant"; text: string };
 
 type SessionUsage = {
   input: number;
@@ -73,6 +77,7 @@ export async function persistSdkTurnToSession(
   turn: {
     assistantText: string;
     resultMessage: SDKResultMessage | undefined;
+    errorMessage?: string;
   },
 ): Promise<void> {
   const lock = await acquireSessionWriteLock({ sessionFile: params.sessionFile });
@@ -94,18 +99,19 @@ export async function persistSdkTurnToSession(
         : "";
     const assistantText = (turn.assistantText || fallbackResultText).trim();
     const isError = resultMessage?.type === "result" && resultMessage.subtype !== "success";
+    const assistantErrorMessage = (
+      isError ? resultMessage.errors.join("; ") : turn.errorMessage
+    )?.trim();
 
-    if (!assistantText && !isError) {
+    if (!assistantText && !assistantErrorMessage) {
       return;
     }
 
     sessionManager.appendMessage({
       role: "assistant",
       content: assistantText ? [{ type: "text", text: assistantText }] : [],
-      stopReason: isError ? "error" : (resultMessage?.stop_reason ?? "stop"),
-      errorMessage: isError
-        ? resultMessage.errors.join("; ") || `SDK ${resultMessage.subtype}`
-        : undefined,
+      stopReason: assistantErrorMessage ? "error" : (resultMessage?.stop_reason ?? "stop"),
+      errorMessage: assistantErrorMessage,
       api: "anthropic-messages",
       provider: params.provider ?? "anthropic",
       model: params.model ?? "claude-opus-4-6",
@@ -124,7 +130,7 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
   try {
     const sessionManager = SessionManager.open(params.sessionFile);
     const branch = sessionManager.getBranch() as SessionBranchEntry[];
-    const lines: string[] = [];
+    const turns: TranscriptTurn[] = [];
     for (const entry of branch) {
       if (entry.type !== "message") {
         continue;
@@ -137,14 +143,21 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
       if (!text) {
         continue;
       }
-      lines.push(`${role === "user" ? "User" : "Assistant"}: ${text}`);
+      turns.push({
+        role: role as "user" | "assistant",
+        text,
+      });
     }
 
-    if (lines.length === 0) {
+    if (turns.length === 0) {
       return [];
     }
 
-    let trimmed = lines.slice(-MAX_HISTORY_MESSAGES);
+    const historyLimit = resolveHistoryLimit(params);
+    const limitedTurns = limitHistoryTurnsByUserCount(turns, historyLimit);
+    let trimmed = limitedTurns
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((turn) => `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`);
     const currentPrompt = params.prompt.trim();
     if (currentPrompt) {
       const duplicateTail = `User: ${currentPrompt}`;
@@ -174,6 +187,32 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
   } catch {
     return [];
   }
+}
+
+function resolveHistoryLimit(params: RunEmbeddedPiAgentParams): number | undefined {
+  const sessionKey = params.sessionKey ?? params.sessionId;
+  return getHistoryLimitFromSessionKey(sessionKey, params.config);
+}
+
+function limitHistoryTurnsByUserCount(
+  turns: TranscriptTurn[],
+  historyLimit: number | undefined,
+): TranscriptTurn[] {
+  if (!historyLimit || historyLimit <= 0) {
+    return turns;
+  }
+  let userCount = 0;
+  let start = turns.length;
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    if (turns[i].role === "user") {
+      userCount += 1;
+      if (userCount > historyLimit) {
+        return turns.slice(start);
+      }
+      start = i;
+    }
+  }
+  return turns;
 }
 
 function extractTextFromContent(content: unknown): string {

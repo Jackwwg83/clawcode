@@ -2,6 +2,9 @@ import type {
   SDKMessage,
   SDKAssistantMessage,
   SDKPartialAssistantMessage,
+  SDKStatusMessage,
+  SDKToolProgressMessage,
+  SDKToolUseSummaryMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
 
@@ -9,6 +12,8 @@ export type StreamState = {
   assistantTexts: string[];
   currentBlockText: string;
   hasStartedMessage: boolean;
+  sawStreamTextDelta: boolean;
+  isCompacting: boolean;
 };
 
 export function createStreamState(): StreamState {
@@ -16,6 +21,8 @@ export function createStreamState(): StreamState {
     assistantTexts: [],
     currentBlockText: "",
     hasStartedMessage: false,
+    sawStreamTextDelta: false,
+    isCompacting: false,
   };
 }
 
@@ -34,8 +41,16 @@ export async function handleSdkMessage(
       break;
     }
     case "result": {
+      if (state.isCompacting) {
+        state.isCompacting = false;
+        await params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false },
+        });
+      }
       // Flush any pending block
       if (state.currentBlockText) {
+        state.assistantTexts.push(state.currentBlockText);
         await params.onBlockReply?.({ text: state.currentBlockText });
         await params.onBlockReplyFlush?.();
         state.currentBlockText = "";
@@ -43,10 +58,32 @@ export async function handleSdkMessage(
       break;
     }
     case "tool_use_summary": {
-      const summary = (message as { summary?: string }).summary;
+      const summary = message.summary;
       if (summary) {
         await params.onToolResult?.({ text: summary });
+        await params.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "end", summary },
+        });
       }
+      break;
+    }
+    case "tool_progress": {
+      const progress = message;
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "update",
+          toolName: progress.tool_name,
+          toolUseId: progress.tool_use_id,
+          parentToolUseId: progress.parent_tool_use_id,
+          elapsedTimeSeconds: progress.elapsed_time_seconds,
+        },
+      });
+      break;
+    }
+    case "system": {
+      await handleSystemMessage(message, params, state);
       break;
     }
     // tool_progress, system, etc. — 不需要映射到上游回调
@@ -67,16 +104,23 @@ async function handleAssistantMessage(
     return;
   }
 
+  let assistantText = "";
   for (const block of message.message.content) {
     if (block.type === "text") {
-      state.assistantTexts.push(block.text);
-      state.currentBlockText += block.text;
+      assistantText += block.text;
     } else if (block.type === "thinking" && "thinking" in block) {
       // Reasoning/thinking content
       await params.onReasoningStream?.({
         text: (block as unknown as { thinking: string }).thinking,
       });
     }
+  }
+
+  // SDK can emit both stream_event deltas and a final assistant snapshot.
+  // Skip assistant text replay when delta streaming already carried the text.
+  if (assistantText && !state.sawStreamTextDelta) {
+    state.assistantTexts.push(assistantText);
+    state.currentBlockText += assistantText;
   }
 
   // Flush block at end of assistant message
@@ -109,6 +153,7 @@ async function handleStreamEvent(
       event as unknown as { delta: { type: string; text?: string; thinking?: string } }
     ).delta;
     if (delta?.type === "text_delta" && delta.text) {
+      state.sawStreamTextDelta = true;
       state.currentBlockText += delta.text;
       await params.onPartialReply?.({ text: delta.text });
     } else if (delta?.type === "thinking_delta" && delta.thinking) {
@@ -124,5 +169,33 @@ async function handleStreamEvent(
       await params.onBlockReplyFlush?.();
       state.currentBlockText = "";
     }
+  }
+}
+
+async function handleSystemMessage(
+  message: SDKMessage,
+  params: RunEmbeddedPiAgentParams,
+  state: StreamState,
+): Promise<void> {
+  const system = message as SDKStatusMessage;
+  if (system.subtype !== "status") {
+    return;
+  }
+
+  const compacting = system.status === "compacting";
+  if (compacting && !state.isCompacting) {
+    state.isCompacting = true;
+    await params.onAgentEvent?.({
+      stream: "compaction",
+      data: { phase: "start" },
+    });
+    return;
+  }
+  if (!compacting && state.isCompacting) {
+    state.isCompacting = false;
+    await params.onAgentEvent?.({
+      stream: "compaction",
+      data: { phase: "end", willRetry: false },
+    });
   }
 }

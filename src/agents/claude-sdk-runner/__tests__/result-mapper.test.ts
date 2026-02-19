@@ -102,4 +102,58 @@ describe("mapSdkResultToRunResult", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.meta.error?.kind).toBe("context_overflow");
   });
+
+  it("falls back to SDK result text when stream text is empty", () => {
+    const result = mapSdkResultToRunResult({
+      resultMessage: {
+        type: "result",
+        subtype: "success",
+        result: "fallback text",
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        stop_reason: "end_turn",
+        total_cost_usd: 0,
+        modelUsage: {},
+        permission_denials: [],
+        uuid: "uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKResultMessage,
+      assistantTexts: [],
+      durationMs: 5,
+      params: baseParams,
+    });
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]?.text).toBe("fallback text");
+  });
+
+  it("maps role ordering errors", () => {
+    const result = mapSdkResultToRunResult({
+      resultMessage: {
+        type: "result",
+        subtype: "error_during_execution",
+        errors: ["roles must alternate between user and assistant"],
+        usage: {
+          input_tokens: 2,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        stop_reason: "error",
+      } as unknown as SDKResultMessage,
+      assistantTexts: [],
+      durationMs: 42,
+      params: baseParams,
+    });
+
+    expect(result.meta.error?.kind).toBe("role_ordering");
+  });
 });

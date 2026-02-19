@@ -1,6 +1,9 @@
+import path from "node:path";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
 
 type SdkOptions = import("@anthropic-ai/claude-agent-sdk").Options;
+type PermissionResult = import("@anthropic-ai/claude-agent-sdk").PermissionResult;
+type CanUseTool = import("@anthropic-ai/claude-agent-sdk").CanUseTool;
 
 export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
   // Build append: workspace context files + workspace dir + extraSystemPrompt
@@ -26,7 +29,7 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
   }
 
   // 2. Workspace directory instruction (uses sandboxed agent workspace, not code dir)
-  const agentCwd = process.env.CLAWCODE_AGENT_CWD || "/home/ubuntu/agent-workspace";
+  const agentCwd = params.workspaceDir?.trim() || process.env.CLAWCODE_AGENT_CWD || process.cwd();
   appendParts.push(
     `# Workspace\n\nYour working directory is: ${agentCwd}\n` +
       "All file operations (read, write, edit, create) MUST stay within this directory.\n" +
@@ -50,8 +53,7 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
       ? { type: "preset", preset: "claude_code", append }
       : { type: "preset", preset: "claude_code" },
 
-    permissionMode: "bypassPermissions",
-    allowDangerouslySkipPermissions: true,
+    permissionMode: "dontAsk",
 
     persistSession: false,
     includePartialMessages: true,
@@ -59,6 +61,9 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
 
     // 继承完整环境变量，确保 ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等认证配置传递到 claude 子进程
     env: { ...process.env },
+
+    // Enforce OpenClaw workspace boundary in SDK tool permissions.
+    canUseTool: createToolPermissionGuard({ workspaceDir: agentCwd }),
 
     // Phase 3: 启用 SDK 内置工具（移除 Phase 1b 的 disallowedTools）
     // 如果 OpenClaw 明确禁用了工具，则在 SDK 侧也禁用
@@ -96,4 +101,114 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
   }
 
   return options;
+}
+
+function createToolPermissionGuard(params: { workspaceDir: string }): CanUseTool {
+  const workspaceRoot = path.resolve(params.workspaceDir);
+  return async (toolName, input, options): Promise<PermissionResult> => {
+    const blockedPath = typeof options.blockedPath === "string" ? options.blockedPath : undefined;
+    if (blockedPath && !isPathWithinWorkspace(blockedPath, workspaceRoot)) {
+      return deny(`Tool "${toolName}" cannot access path outside workspace: ${blockedPath}`);
+    }
+
+    if (isPathScopedTool(toolName)) {
+      const paths = collectCandidatePaths(input);
+      for (const candidate of paths) {
+        if (!isPathWithinWorkspace(candidate, workspaceRoot)) {
+          return deny(`Tool "${toolName}" cannot access path outside workspace: ${candidate}`);
+        }
+      }
+    }
+
+    if (toolName === "Bash") {
+      const command = extractCommand(input);
+      if (command && touchesRestrictedRoot(command)) {
+        return deny(`Bash command references restricted paths outside workspace.`);
+      }
+    }
+
+    return allow();
+  };
+}
+
+function isPathScopedTool(toolName: string): boolean {
+  return new Set(["Read", "Edit", "Write", "Glob", "Grep", "NotebookEdit"]).has(toolName);
+}
+
+function collectCandidatePaths(input: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  const walk = (value: unknown, keyHint?: string) => {
+    if (typeof value === "string") {
+      if (looksLikePath(value, keyHint)) {
+        paths.push(value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item, keyHint);
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    for (const [key, nested] of Object.entries(value)) {
+      walk(nested, key);
+    }
+  };
+  walk(input);
+  return paths;
+}
+
+function looksLikePath(value: string, keyHint?: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return false;
+  }
+  if (/^https?:\/\//i.test(text)) {
+    return false;
+  }
+  const key = (keyHint ?? "").toLowerCase();
+  if (key.includes("path") || key.includes("file") || key.includes("cwd")) {
+    return true;
+  }
+  return (
+    text.startsWith("/") || text.startsWith("./") || text.startsWith("../") || text.includes("/")
+  );
+}
+
+function isPathWithinWorkspace(rawPath: string, workspaceRoot: string): boolean {
+  const resolved = path.resolve(workspaceRoot, rawPath);
+  return resolved === workspaceRoot || resolved.startsWith(`${workspaceRoot}${path.sep}`);
+}
+
+function extractCommand(input: Record<string, unknown>): string | undefined {
+  const cmd = input.command;
+  if (typeof cmd === "string" && cmd.trim()) {
+    return cmd;
+  }
+  const script = input.script;
+  if (typeof script === "string" && script.trim()) {
+    return script;
+  }
+  return undefined;
+}
+
+function touchesRestrictedRoot(command: string): boolean {
+  const lowered = command.toLowerCase();
+  return (
+    lowered.includes("/.openclaw") ||
+    lowered.includes("/home/ubuntu/clawcode") ||
+    lowered.includes("/etc/") ||
+    lowered.includes("/root/")
+  );
+}
+
+function allow(): PermissionResult {
+  return { behavior: "allow" };
+}
+
+function deny(message: string): PermissionResult {
+  return { behavior: "deny", message };
 }

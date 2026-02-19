@@ -15,10 +15,23 @@ export async function runClaudeSdkAgent(
   const options = buildSdkOptions(params);
   const handle = registerSdkRun(params.sessionId);
   const state = createStreamState();
+  let resultMessage: SDKResultMessage | undefined;
+  let didPersist = false;
 
   // Timeout timer
   let timeoutTimer: NodeJS.Timeout | undefined;
   let timedOut = false;
+  const persistTurn = async (errorMessage?: string) => {
+    if (didPersist) {
+      return;
+    }
+    didPersist = true;
+    await persistSdkTurnToSession(params, {
+      assistantText: state.assistantTexts.join(""),
+      resultMessage,
+      errorMessage,
+    });
+  };
 
   try {
     const prompt = buildSdkPrompt(params);
@@ -47,8 +60,6 @@ export async function runClaudeSdkAgent(
       }, params.timeoutMs);
     }
 
-    let resultMessage: SDKResultMessage | undefined;
-
     for await (const message of conversation) {
       await handleSdkMessage(message, params, state);
       if (message.type === "result") {
@@ -63,22 +74,21 @@ export async function runClaudeSdkAgent(
       params,
       timedOut,
     });
-    await persistSdkTurnToSession(params, {
-      assistantText: state.assistantTexts.join(""),
-      resultMessage,
-    });
+    await persistTurn();
     return runResult;
   } catch (error) {
     if (error instanceof AbortError) {
+      await persistTurn();
       // Normal abort, return gracefully
       return mapSdkResultToRunResult({
-        resultMessage: undefined,
+        resultMessage,
         assistantTexts: state.assistantTexts,
         durationMs: Date.now() - started,
         params,
         timedOut,
       });
     }
+    await persistTurn(error instanceof Error ? error.message : String(error));
     // auth/billing/rate_limit → FailoverError，让外层 fallback 捕获
     if (error instanceof Error) {
       const msg = error.message.toLowerCase();

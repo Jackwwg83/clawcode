@@ -13,7 +13,12 @@ export function mapSdkResultToRunResult(ctx: {
   timedOut?: boolean;
 }): EmbeddedPiRunResult {
   const { resultMessage, assistantTexts, durationMs, params, timedOut = false } = ctx;
-  const fullText = assistantTexts.join("");
+  const streamedText = assistantTexts.join("");
+  const resultText =
+    resultMessage?.type === "result" && resultMessage.subtype === "success"
+      ? resultMessage.result
+      : "";
+  const fullText = streamedText || resultText;
 
   const agentMeta: EmbeddedPiAgentMeta = {
     sessionId: params.sessionId,
@@ -86,6 +91,15 @@ function mapSdkErrorKind(result: SDKResultMessage):
   // 检查是否包含 context overflow 关键词
   if (errors.some((e) => /context|overflow|token.*limit|too.*long/i.test(e))) {
     return { kind: "context_overflow", message: errorMsg };
+  }
+  if (errors.some((e) => /compaction|compact/i.test(e))) {
+    return { kind: "compaction_failure", message: errorMsg };
+  }
+  if (errors.some((e) => /role|ordering|alternate/i.test(e))) {
+    return { kind: "role_ordering", message: errorMsg };
+  }
+  if (errors.some((e) => /image|too.*large|max.*image|unsupported.*image/i.test(e))) {
+    return { kind: "image_size", message: errorMsg };
   }
 
   // 其他 SDK 错误没有直接对应的 OpenClaw error kind
