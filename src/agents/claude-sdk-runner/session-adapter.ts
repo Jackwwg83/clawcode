@@ -1,4 +1,34 @@
+import type {
+  SDKResultMessage,
+  SDKUserMessage,
+  NonNullableUsage,
+} from "@anthropic-ai/claude-agent-sdk";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
+
+const MAX_HISTORY_MESSAGES = 24;
+const MAX_HISTORY_CHARS = 12_000;
+
+type SessionBranchEntry = {
+  type: string;
+  message?: { role?: string; content?: unknown };
+};
+
+type SessionUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+};
 
 /**
  * Session adapter for Claude SDK runner.
@@ -23,19 +53,175 @@ import type { RunEmbeddedPiAgentParams } from "./types.js";
  */
 export function buildSdkPrompt(
   params: RunEmbeddedPiAgentParams,
-): string | AsyncIterable<import("@anthropic-ai/claude-agent-sdk").SDKUserMessage> {
-  // Phase 4 MVP: single-turn, use prompt directly
-  // Multi-turn resume is a future enhancement
-  return params.prompt;
+): string | AsyncIterable<SDKUserMessage> {
+  const history = loadSessionHistoryLines(params);
+  if (history.length === 0) {
+    return params.prompt;
+  }
+  const prompt = [
+    "Conversation history from OpenClaw session memory:",
+    ...history,
+    "",
+    "Continue the same conversation and reply to the latest user message below.",
+    `User: ${params.prompt}`,
+  ].join("\n");
+  return prompt;
+}
+
+export async function persistSdkTurnToSession(
+  params: RunEmbeddedPiAgentParams,
+  turn: {
+    assistantText: string;
+    resultMessage: SDKResultMessage | undefined;
+  },
+): Promise<void> {
+  const lock = await acquireSessionWriteLock({ sessionFile: params.sessionFile });
+  try {
+    const sessionManager = SessionManager.open(params.sessionFile);
+    const promptText = params.prompt.trim();
+    if (promptText) {
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: promptText }],
+        timestamp: Date.now(),
+      } as Parameters<typeof sessionManager.appendMessage>[0]);
+    }
+
+    const resultMessage = turn.resultMessage;
+    const fallbackResultText =
+      resultMessage?.type === "result" && resultMessage.subtype === "success"
+        ? resultMessage.result
+        : "";
+    const assistantText = (turn.assistantText || fallbackResultText).trim();
+    const isError = resultMessage?.type === "result" && resultMessage.subtype !== "success";
+
+    if (!assistantText && !isError) {
+      return;
+    }
+
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: assistantText ? [{ type: "text", text: assistantText }] : [],
+      stopReason: isError ? "error" : (resultMessage?.stop_reason ?? "stop"),
+      errorMessage: isError
+        ? resultMessage.errors.join("; ") || `SDK ${resultMessage.subtype}`
+        : undefined,
+      api: "anthropic-messages",
+      provider: params.provider ?? "anthropic",
+      model: params.model ?? "claude-opus-4-6",
+      usage: buildSessionUsage(resultMessage?.type === "result" ? resultMessage.usage : undefined),
+      timestamp: Date.now(),
+    } as Parameters<typeof sessionManager.appendMessage>[0]);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[claude-sdk-runner] failed to persist session turn: ${message}`);
+  } finally {
+    await lock.release();
+  }
+}
+
+function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
+  try {
+    const sessionManager = SessionManager.open(params.sessionFile);
+    const branch = sessionManager.getBranch() as SessionBranchEntry[];
+    const lines: string[] = [];
+    for (const entry of branch) {
+      if (entry.type !== "message") {
+        continue;
+      }
+      const role = entry.message?.role;
+      if (role !== "user" && role !== "assistant") {
+        continue;
+      }
+      const text = extractTextFromContent(entry.message?.content);
+      if (!text) {
+        continue;
+      }
+      lines.push(`${role === "user" ? "User" : "Assistant"}: ${text}`);
+    }
+
+    if (lines.length === 0) {
+      return [];
+    }
+
+    let trimmed = lines.slice(-MAX_HISTORY_MESSAGES);
+    const currentPrompt = params.prompt.trim();
+    if (currentPrompt) {
+      const duplicateTail = `User: ${currentPrompt}`;
+      if (trimmed[trimmed.length - 1] === duplicateTail) {
+        trimmed = trimmed.slice(0, -1);
+      }
+    }
+
+    if (trimmed.length === 0) {
+      return [];
+    }
+
+    const capped: string[] = [];
+    let usedChars = 0;
+    for (let i = trimmed.length - 1; i >= 0; i -= 1) {
+      const line = trimmed[i];
+      if (usedChars + line.length > MAX_HISTORY_CHARS) {
+        if (capped.length === 0) {
+          capped.unshift(line.slice(-MAX_HISTORY_CHARS));
+        }
+        break;
+      }
+      capped.unshift(line);
+      usedChars += line.length;
+    }
+    return capped;
+  } catch {
+    return [];
+  }
+}
+
+function extractTextFromContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const texts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim()) {
+      texts.push(text.trim());
+    }
+  }
+  return texts.join("\n");
+}
+
+function buildSessionUsage(usage: NonNullableUsage | undefined): SessionUsage {
+  const input = usage?.input_tokens ?? 0;
+  const output = usage?.output_tokens ?? 0;
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage?.cache_creation_input_tokens ?? 0;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: input + output,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
 }
 
 /**
  * Extract session-relevant data from SDK result
  * for writing back to OpenClaw SessionManager.
  */
-export function extractSessionData(
-  resultMessage: import("@anthropic-ai/claude-agent-sdk").SDKResultMessage | undefined,
-): {
+export function extractSessionData(resultMessage: SDKResultMessage | undefined): {
   sdkSessionId?: string;
   tokenUsage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 } {

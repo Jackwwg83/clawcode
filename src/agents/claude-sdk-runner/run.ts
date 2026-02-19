@@ -5,7 +5,7 @@ import { FailoverError } from "../failover-error.js";
 import { registerSdkRun, clearSdkRun } from "./active-run-tracker.js";
 import { buildSdkOptions } from "./options-builder.js";
 import { mapSdkResultToRunResult } from "./result-mapper.js";
-import { buildSdkPrompt } from "./session-adapter.js";
+import { buildSdkPrompt, persistSdkTurnToSession } from "./session-adapter.js";
 import { createStreamState, handleSdkMessage } from "./stream-adapter.js";
 
 export async function runClaudeSdkAgent(
@@ -56,13 +56,18 @@ export async function runClaudeSdkAgent(
       }
     }
 
-    return mapSdkResultToRunResult({
+    const runResult = mapSdkResultToRunResult({
       resultMessage,
       assistantTexts: state.assistantTexts,
       durationMs: Date.now() - started,
       params,
       timedOut,
     });
+    await persistSdkTurnToSession(params, {
+      assistantText: state.assistantTexts.join(""),
+      resultMessage,
+    });
+    return runResult;
   } catch (error) {
     if (error instanceof AbortError) {
       // Normal abort, return gracefully
