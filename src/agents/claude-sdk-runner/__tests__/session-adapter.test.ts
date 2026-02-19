@@ -61,9 +61,12 @@ describe("claude-sdk session adapter", () => {
     } as unknown as RunEmbeddedPiAgentParams);
 
     expect(typeof prompt).toBe("string");
-    expect(String(prompt)).toContain("User: seed user");
-    expect(String(prompt)).toContain("Assistant: seed assistant");
-    expect(String(prompt)).toContain("User: new question");
+    if (typeof prompt !== "string") {
+      throw new Error("expected string prompt");
+    }
+    expect(prompt).toContain("User: seed user");
+    expect(prompt).toContain("Assistant: seed assistant");
+    expect(prompt).toContain("User: new question");
   });
 
   it("persists user and assistant turns to session transcript", async () => {
