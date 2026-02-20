@@ -512,20 +512,8 @@
       "destination": "/start/onboarding"
     },
     {
-      "source": "/onboarding-config-protocol",
-      "destination": "/experiments/onboarding-config-protocol"
-    },
-    {
       "source": "/pairing",
       "destination": "/channels/pairing"
-    },
-    {
-      "source": "/plans/cron-add-hardening",
-      "destination": "/experiments/plans/cron-add-hardening"
-    },
-    {
-      "source": "/plans/group-policy-hardening",
-      "destination": "/experiments/plans/group-policy-hardening"
     },
     {
       "source": "/poll",
@@ -534,10 +522,6 @@
     {
       "source": "/presence",
       "destination": "/concepts/presence"
-    },
-    {
-      "source": "/proposals/model-config",
-      "destination": "/experiments/proposals/model-config"
     },
     {
       "source": "/provider-routing",
@@ -558,10 +542,6 @@
     {
       "source": "/remote-gateway-readme",
       "destination": "/gateway/remote-gateway-readme"
-    },
-    {
-      "source": "/research/memory",
-      "destination": "/experiments/research/memory"
     },
     {
       "source": "/rpc",
@@ -1248,16 +1228,6 @@
               {
                 "group": "Release notes",
                 "pages": ["reference/RELEASING", "reference/test"]
-              },
-              {
-                "group": "Experiments",
-                "pages": [
-                  "experiments/onboarding-config-protocol",
-                  "experiments/plans/cron-add-hardening",
-                  "experiments/plans/group-policy-hardening",
-                  "experiments/research/memory",
-                  "experiments/proposals/model-config"
-                ]
               }
             ]
           },
