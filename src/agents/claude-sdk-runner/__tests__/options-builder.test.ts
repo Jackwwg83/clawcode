@@ -3,7 +3,7 @@ import type { RunEmbeddedPiAgentParams } from "../../pi-embedded-runner/run/para
 import { buildSdkOptions } from "../options-builder.js";
 
 describe("options-builder", () => {
-  it("uses run workspace as cwd and enforces non-interactive permission mode", async () => {
+  it("uses run workspace as cwd and enables bypass permissions", async () => {
     const params = {
       sessionId: "s",
       sessionFile: "/tmp/s.jsonl",
@@ -17,18 +17,12 @@ describe("options-builder", () => {
 
     const options = buildSdkOptions(params);
     expect(options.cwd).toBe("/tmp/ws");
-    expect(options.permissionMode).toBe("dontAsk");
-    expect(typeof options.canUseTool).toBe("function");
-
-    const canUseTool = options.canUseTool!;
-    const allowed = await canUseTool("Read", { file_path: "notes/today.md" }, {} as never);
-    expect(allowed.behavior).toBe("allow");
-
-    const denied = await canUseTool("Read", { file_path: "/etc/passwd" }, {} as never);
-    expect(denied.behavior).toBe("deny");
+    expect(options.permissionMode).toBe("bypassPermissions");
+    expect(options.allowDangerouslySkipPermissions).toBe(true);
+    expect(options.canUseTool).toBeUndefined();
   });
 
-  it("applies OpenClaw tool policy mappings to SDK built-ins", async () => {
+  it("disables SDK tools only when disableTools=true", () => {
     const params = {
       sessionId: "s",
       sessionKey: "telegram:dm:alice",
@@ -39,23 +33,12 @@ describe("options-builder", () => {
       runId: "run",
       provider: "anthropic",
       model: "claude-sonnet-4-6",
-      config: {
-        tools: {
-          allow: ["read"],
-        },
-      },
+      disableTools: true,
     } as unknown as RunEmbeddedPiAgentParams;
 
     const options = buildSdkOptions(params);
-    const canUseTool = options.canUseTool!;
-
-    const read = await canUseTool("Read", { file_path: "notes/today.md" }, {} as never);
-    expect(read.behavior).toBe("allow");
-
-    const bash = await canUseTool("Bash", { command: "pwd" }, {} as never);
-    expect(bash.behavior).toBe("deny");
-
-    const webSearch = await canUseTool("WebSearch", { query: "latest news" }, {} as never);
-    expect(webSearch.behavior).toBe("deny");
+    expect(options.disallowedTools).toBeDefined();
+    expect(options.disallowedTools).toContain("Bash");
+    expect(options.disallowedTools).toContain("Read");
   });
 });
