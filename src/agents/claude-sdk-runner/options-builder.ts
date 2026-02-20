@@ -1,8 +1,17 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { StreamState } from "./stream-adapter.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
 import { buildOpenClawMcpServer } from "./mcp-tool-bridge.js";
 
 type SdkOptions = import("@anthropic-ai/claude-agent-sdk").Options;
+type SettingSource = import("@anthropic-ai/claude-agent-sdk").SettingSource;
+type SdkPluginConfig = import("@anthropic-ai/claude-agent-sdk").SdkPluginConfig;
+
+const DEFAULT_SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
+const CLAUDE_PLUGINS_DIR = path.join(".claude", "plugins");
+const PLUGIN_MANIFEST_RELATIVE = path.join(".claude-plugin", "plugin.json");
 
 export function buildSdkOptions(
   params: RunEmbeddedPiAgentParams,
@@ -62,7 +71,7 @@ export function buildSdkOptions(
 
     persistSession: true,
     includePartialMessages: true,
-    settingSources: [],
+    settingSources: resolveSettingSources(),
 
     // 继承完整环境变量，确保 ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等认证配置传递到 claude 子进程
     env: { ...process.env },
@@ -90,6 +99,11 @@ export function buildSdkOptions(
         }
       : {}),
   };
+
+  const plugins = resolveClaudeSdkPlugins(agentCwd);
+  if (plugins.length > 0) {
+    options.plugins = plugins;
+  }
 
   if (!params.disableTools && streamState) {
     const openclawMcp = buildOpenClawMcpServer({
@@ -123,4 +137,90 @@ function deriveDatedModelFallback(model: string): string | undefined {
     return undefined;
   }
   return match[1];
+}
+
+function resolveSettingSources(): SettingSource[] {
+  const raw = process.env.CLAWCODE_CLAUDE_SDK_SETTING_SOURCES?.trim();
+  if (!raw) {
+    return [...DEFAULT_SETTING_SOURCES];
+  }
+  const allowed = new Set<SettingSource>(["user", "project", "local"]);
+  const parsed = raw
+    .split(/[,\s]+/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value): value is SettingSource => allowed.has(value as SettingSource));
+  return parsed.length > 0 ? Array.from(new Set(parsed)) : [...DEFAULT_SETTING_SOURCES];
+}
+
+function resolveClaudeSdkPlugins(agentCwd: string): SdkPluginConfig[] {
+  const roots = new Set<string>();
+  const envPaths = process.env.CLAWCODE_CLAUDE_SDK_PLUGIN_PATHS?.trim();
+  if (envPaths) {
+    for (const value of envPaths.split(path.delimiter)) {
+      const resolved = value.trim();
+      if (resolved) {
+        roots.add(path.resolve(resolved));
+      }
+    }
+  }
+  roots.add(path.join(os.homedir(), CLAUDE_PLUGINS_DIR));
+  roots.add(path.join(agentCwd, CLAUDE_PLUGINS_DIR));
+
+  const discovered = new Set<string>();
+  for (const root of roots) {
+    walkPluginRoots(root, discovered, 0);
+  }
+
+  return Array.from(discovered)
+    .toSorted()
+    .map((pluginPath) => ({
+      type: "local",
+      path: pluginPath,
+    }));
+}
+
+function walkPluginRoots(dirPath: string, out: Set<string>, depth: number): void {
+  if (depth > 3) {
+    return;
+  }
+  if (!fs.existsSync(dirPath)) {
+    return;
+  }
+  if (hasPluginManifest(dirPath)) {
+    out.add(path.resolve(dirPath));
+    return;
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (entry.name === ".claude-plugin" || entry.name === "node_modules") {
+      continue;
+    }
+    const childPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      walkPluginRoots(childPath, out, depth + 1);
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      try {
+        const stat = fs.statSync(childPath);
+        if (stat.isDirectory()) {
+          walkPluginRoots(childPath, out, depth + 1);
+        }
+      } catch {
+        // ignore broken symlink / unreadable path
+      }
+    }
+  }
+}
+
+function hasPluginManifest(dirPath: string): boolean {
+  return fs.existsSync(path.join(dirPath, PLUGIN_MANIFEST_RELATIVE));
 }

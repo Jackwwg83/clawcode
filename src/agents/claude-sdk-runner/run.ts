@@ -1,9 +1,11 @@
 import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query, AbortError } from "@anthropic-ai/claude-agent-sdk";
 import type { RunEmbeddedPiAgentParams, EmbeddedPiRunResult } from "./types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { FailoverError } from "../failover-error.js";
 import { registerSdkRun, clearSdkRun } from "./active-run-tracker.js";
 import { buildSdkOptions } from "./options-builder.js";
+import { rewritePromptForClaudePluginInstall } from "./plugin-intent.js";
 import { mapSdkResultToRunResult } from "./result-mapper.js";
 import {
   buildSdkPrompt,
@@ -12,6 +14,8 @@ import {
   persistSdkTurnToSession,
 } from "./session-adapter.js";
 import { createStreamState, handleSdkMessage } from "./stream-adapter.js";
+
+const log = createSubsystemLogger("agents/claude-sdk");
 
 export async function runClaudeSdkAgent(
   params: RunEmbeddedPiAgentParams,
@@ -50,9 +54,18 @@ export async function runClaudeSdkAgent(
       options.resume = resumeSessionId;
     }
 
-    const prompt = buildSdkPrompt(params, {
-      skipHistory: !!resumeSessionId,
-    });
+    const pluginRewrite = rewritePromptForClaudePluginInstall(params.prompt);
+    const promptForSdk = pluginRewrite.rewritten ? pluginRewrite.rewrittenPrompt : params.prompt;
+    if (pluginRewrite.rewritten) {
+      log.info(`rewrote user plugin install intent to slash command: ${pluginRewrite.pluginSpec}`);
+    }
+
+    const prompt = buildSdkPrompt(
+      { ...params, prompt: promptForSdk },
+      {
+        skipHistory: !!resumeSessionId,
+      },
+    );
     const conversation = query({ prompt, options });
 
     // Wire abort to handle (so abortEmbeddedPiRun works)
@@ -79,6 +92,11 @@ export async function runClaudeSdkAgent(
     }
 
     for await (const message of conversation) {
+      if (message.type === "system" && message.subtype === "init") {
+        log.info(
+          `sdk init: plugins=${message.plugins.length} slashCommands=${message.slash_commands.length}`,
+        );
+      }
       await handleSdkMessage(message, params, state);
       if (message.type === "result") {
         resultMessage = message;
