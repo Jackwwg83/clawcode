@@ -6,6 +6,7 @@ import type {
   SDKToolProgressMessage,
   SDKToolUseSummaryMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
 
 export type StreamState = {
@@ -14,6 +15,9 @@ export type StreamState = {
   hasStartedMessage: boolean;
   sawStreamTextDelta: boolean;
   isCompacting: boolean;
+  usedToolNames: Set<string>;
+  messagingToolSentTexts: string[];
+  messagingToolSentTargets: MessagingToolSend[];
 };
 
 export function createStreamState(): StreamState {
@@ -23,6 +27,9 @@ export function createStreamState(): StreamState {
     hasStartedMessage: false,
     sawStreamTextDelta: false,
     isCompacting: false,
+    usedToolNames: new Set<string>(),
+    messagingToolSentTexts: [],
+    messagingToolSentTargets: [],
   };
 }
 
@@ -70,6 +77,7 @@ export async function handleSdkMessage(
     }
     case "tool_progress": {
       const progress = message;
+      state.usedToolNames.add(progress.tool_name);
       await params.onAgentEvent?.({
         stream: "tool",
         data: {

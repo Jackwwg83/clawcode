@@ -1,4 +1,5 @@
 import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 import type {
   RunEmbeddedPiAgentParams,
   EmbeddedPiRunResult,
@@ -8,11 +9,23 @@ import type {
 export function mapSdkResultToRunResult(ctx: {
   resultMessage: SDKResultMessage | undefined;
   assistantTexts: string[];
+  usedToolNames?: Set<string>;
+  messagingToolSentTexts?: string[];
+  messagingToolSentTargets?: MessagingToolSend[];
   durationMs: number;
   params: RunEmbeddedPiAgentParams;
   timedOut?: boolean;
 }): EmbeddedPiRunResult {
-  const { resultMessage, assistantTexts, durationMs, params, timedOut = false } = ctx;
+  const {
+    resultMessage,
+    assistantTexts,
+    usedToolNames = new Set<string>(),
+    messagingToolSentTexts = [],
+    messagingToolSentTargets = [],
+    durationMs,
+    params,
+    timedOut = false,
+  } = ctx;
   const streamedText = assistantTexts.join("");
   const resultText =
     resultMessage?.type === "result" && resultMessage.subtype === "success"
@@ -42,6 +55,11 @@ export function mapSdkResultToRunResult(ctx: {
     agentMeta.promptTokens = u?.input_tokens;
   }
 
+  const didSendViaMessagingTool =
+    messagingToolSentTexts.length > 0 ||
+    messagingToolSentTargets.length > 0 ||
+    Array.from(usedToolNames).some(isMessagingToolName);
+
   if (!resultMessage && (params.abortSignal?.aborted || timedOut)) {
     return {
       payloads: [],
@@ -50,9 +68,9 @@ export function mapSdkResultToRunResult(ctx: {
         agentMeta,
         aborted: true,
       },
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentTargets: [],
+      didSendViaMessagingTool,
+      messagingToolSentTexts: dedupeTexts(messagingToolSentTexts),
+      messagingToolSentTargets: dedupeTargets(messagingToolSentTargets),
     };
   }
 
@@ -69,10 +87,36 @@ export function mapSdkResultToRunResult(ctx: {
         resultMessage?.type === "result" ? (resultMessage.stop_reason ?? undefined) : undefined,
       error: errorKind,
     },
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentTargets: [],
+    didSendViaMessagingTool,
+    messagingToolSentTexts: dedupeTexts(messagingToolSentTexts),
+    messagingToolSentTargets: dedupeTargets(messagingToolSentTargets),
   };
+}
+
+function dedupeTexts(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function dedupeTargets(values: MessagingToolSend[]): MessagingToolSend[] {
+  const seen = new Set<string>();
+  const deduped: MessagingToolSend[] = [];
+  for (const target of values) {
+    const key = `${target.tool}|${target.provider}|${target.accountId ?? ""}|${target.to ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(target);
+  }
+  return deduped;
+}
+
+function isMessagingToolName(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  const canonical = normalized.split("__").pop() ?? normalized;
+  return (
+    canonical === "message" || canonical === "sessions_send" || canonical.startsWith("message_")
+  );
 }
 
 function mapSdkErrorKind(result: SDKResultMessage):

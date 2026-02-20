@@ -1,8 +1,13 @@
+import type { StreamState } from "./stream-adapter.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
+import { buildOpenClawMcpServer } from "./mcp-tool-bridge.js";
 
 type SdkOptions = import("@anthropic-ai/claude-agent-sdk").Options;
 
-export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
+export function buildSdkOptions(
+  params: RunEmbeddedPiAgentParams,
+  streamState?: StreamState,
+): SdkOptions {
   // Build append: workspace context files + workspace dir + extraSystemPrompt
   const appendParts: string[] = [];
 
@@ -42,8 +47,10 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
 
   const append = appendParts.length > 0 ? appendParts.join("\n") : undefined;
 
+  const model = params.model ?? "claude-opus-4-6";
+  const fallbackModel = deriveDatedModelFallback(model);
   const options: SdkOptions = {
-    model: params.model ?? "claude-opus-4-6",
+    model,
     cwd: agentCwd,
 
     systemPrompt: append
@@ -53,7 +60,7 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
 
-    persistSession: false,
+    persistSession: true,
     includePartialMessages: true,
     settingSources: [],
 
@@ -62,6 +69,7 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
 
     // Phase 3: 启用 SDK 内置工具（移除 Phase 1b 的 disallowedTools）
     // 如果 OpenClaw 明确禁用了工具，则在 SDK 侧也禁用
+    ...(fallbackModel ? { fallbackModel } : {}),
     ...(params.disableTools
       ? {
           disallowedTools: [
@@ -83,6 +91,16 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
       : {}),
   };
 
+  if (!params.disableTools && streamState) {
+    const openclawMcp = buildOpenClawMcpServer({
+      runParams: params,
+      streamState,
+    });
+    if (openclawMcp) {
+      options.mcpServers = { openclaw: openclawMcp };
+    }
+  }
+
   // Thinking level mapping
   if (params.thinkLevel && params.thinkLevel !== "off") {
     const thinkingTokenMap: Record<string, number> = {
@@ -96,4 +114,13 @@ export function buildSdkOptions(params: RunEmbeddedPiAgentParams): SdkOptions {
   }
 
   return options;
+}
+
+function deriveDatedModelFallback(model: string): string | undefined {
+  const normalized = model.trim();
+  const match = normalized.match(/^(claude-(?:sonnet|opus|haiku)-\d+(?:-\d+)?)-\d{8}$/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return match[1];
 }

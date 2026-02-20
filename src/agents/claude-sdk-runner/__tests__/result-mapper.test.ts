@@ -156,4 +156,45 @@ describe("mapSdkResultToRunResult", () => {
 
     expect(result.meta.error?.kind).toBe("role_ordering");
   });
+
+  it("marks messaging tool dispatch when messaging tools are used", () => {
+    const result = mapSdkResultToRunResult({
+      resultMessage: {
+        type: "result",
+        subtype: "success",
+        result: "sent",
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        stop_reason: "end_turn",
+        total_cost_usd: 0,
+        modelUsage: {},
+        permission_denials: [],
+        uuid: "uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKResultMessage,
+      assistantTexts: ["sent"],
+      usedToolNames: new Set(["mcp__openclaw__message"]),
+      messagingToolSentTexts: ["hello", "hello"],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "telegram", to: "telegram:123" },
+        { tool: "message", provider: "telegram", to: "telegram:123" },
+      ],
+      durationMs: 10,
+      params: baseParams,
+    });
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["hello"]);
+    expect(result.messagingToolSentTargets).toEqual([
+      { tool: "message", provider: "telegram", to: "telegram:123" },
+    ]);
+  });
 });

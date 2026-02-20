@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RunEmbeddedPiAgentParams } from "../../pi-embedded-runner/run/params.js";
-import { buildSdkPrompt, persistSdkTurnToSession } from "../session-adapter.js";
+import {
+  buildSdkPrompt,
+  loadSdkResumeSessionId,
+  persistSdkResumeSessionId,
+  persistSdkTurnToSession,
+} from "../session-adapter.js";
 
 function getText(content: unknown): string {
   if (typeof content === "string") {
@@ -175,5 +180,39 @@ describe("claude-sdk session adapter", () => {
     expect(getText(user?.content)).toContain("hello from user");
     expect(assistant).toBeDefined();
     expect(getText(assistant?.content)).toContain("hello from assistant");
+  });
+
+  it("persists and loads sdk resume session id", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-sdk-session-resume-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+
+    await persistSdkResumeSessionId({
+      sessionFile,
+      resultMessage: {
+        type: "result",
+        subtype: "success",
+        session_id: "sdk-resume-session",
+        result: "ok",
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        stop_reason: "end_turn",
+        total_cost_usd: 0,
+        modelUsage: {},
+        permission_denials: [],
+        uuid: "uuid",
+      } as never,
+    });
+
+    const loaded = await loadSdkResumeSessionId({ sessionFile });
+    expect(loaded).toBe("sdk-resume-session");
   });
 });

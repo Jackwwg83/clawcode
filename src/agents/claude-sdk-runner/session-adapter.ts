@@ -5,7 +5,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
+import fs from "node:fs/promises";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../pi-embedded-runner/history.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
@@ -28,6 +28,11 @@ type SessionUsage = {
     cacheWrite: number;
     total: number;
   };
+};
+
+type SdkSessionMeta = {
+  resumeSessionId?: string;
+  updatedAt?: string;
 };
 
 /**
@@ -53,7 +58,11 @@ type SessionUsage = {
  */
 export function buildSdkPrompt(
   params: RunEmbeddedPiAgentParams,
+  options?: { skipHistory?: boolean },
 ): string | AsyncIterable<SDKUserMessage> {
+  if (options?.skipHistory) {
+    return params.prompt;
+  }
   const history = loadSessionHistoryLines(params);
   if (history.length === 0) {
     return params.prompt;
@@ -120,6 +129,43 @@ export async function persistSdkTurnToSession(
   } finally {
     await lock.release();
   }
+}
+
+export async function loadSdkResumeSessionId(
+  params: Pick<RunEmbeddedPiAgentParams, "sessionFile">,
+): Promise<string | undefined> {
+  try {
+    const raw = await fs.readFile(getSdkSessionMetaFile(params.sessionFile), "utf8");
+    const parsed = JSON.parse(raw) as SdkSessionMeta;
+    const sessionId = parsed.resumeSessionId?.trim();
+    return sessionId || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function persistSdkResumeSessionId(params: {
+  sessionFile: string;
+  resultMessage?: SDKResultMessage;
+}): Promise<void> {
+  const resumeSessionId = params.resultMessage?.session_id?.trim();
+  if (!resumeSessionId) {
+    return;
+  }
+  const meta: SdkSessionMeta = {
+    resumeSessionId,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await fs.writeFile(getSdkSessionMetaFile(params.sessionFile), JSON.stringify(meta), "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[claude-sdk-runner] failed to persist sdk session id: ${message}`);
+  }
+}
+
+function getSdkSessionMetaFile(sessionFile: string): string {
+  return `${sessionFile}.claude-sdk.json`;
 }
 
 function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {

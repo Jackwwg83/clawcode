@@ -5,16 +5,21 @@ import { FailoverError } from "../failover-error.js";
 import { registerSdkRun, clearSdkRun } from "./active-run-tracker.js";
 import { buildSdkOptions } from "./options-builder.js";
 import { mapSdkResultToRunResult } from "./result-mapper.js";
-import { buildSdkPrompt, persistSdkTurnToSession } from "./session-adapter.js";
+import {
+  buildSdkPrompt,
+  loadSdkResumeSessionId,
+  persistSdkResumeSessionId,
+  persistSdkTurnToSession,
+} from "./session-adapter.js";
 import { createStreamState, handleSdkMessage } from "./stream-adapter.js";
 
 export async function runClaudeSdkAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
-  const options = buildSdkOptions(params);
-  const handle = registerSdkRun(params.sessionId);
   const state = createStreamState();
+  const options = buildSdkOptions(params, state);
+  const handle = registerSdkRun(params.sessionId);
   let resultMessage: SDKResultMessage | undefined;
   let didPersist = false;
 
@@ -31,10 +36,23 @@ export async function runClaudeSdkAgent(
       resultMessage,
       errorMessage,
     });
+    await persistSdkResumeSessionId({
+      sessionFile: params.sessionFile,
+      resultMessage,
+    });
   };
 
   try {
-    const prompt = buildSdkPrompt(params);
+    const resumeSessionId = await loadSdkResumeSessionId({
+      sessionFile: params.sessionFile,
+    });
+    if (resumeSessionId) {
+      options.resume = resumeSessionId;
+    }
+
+    const prompt = buildSdkPrompt(params, {
+      skipHistory: !!resumeSessionId,
+    });
     const conversation = query({ prompt, options });
 
     // Wire abort to handle (so abortEmbeddedPiRun works)
@@ -70,6 +88,9 @@ export async function runClaudeSdkAgent(
     const runResult = mapSdkResultToRunResult({
       resultMessage,
       assistantTexts: state.assistantTexts,
+      usedToolNames: state.usedToolNames,
+      messagingToolSentTexts: state.messagingToolSentTexts,
+      messagingToolSentTargets: state.messagingToolSentTargets,
       durationMs: Date.now() - started,
       params,
       timedOut,
@@ -83,6 +104,9 @@ export async function runClaudeSdkAgent(
       return mapSdkResultToRunResult({
         resultMessage,
         assistantTexts: state.assistantTexts,
+        usedToolNames: state.usedToolNames,
+        messagingToolSentTexts: state.messagingToolSentTexts,
+        messagingToolSentTargets: state.messagingToolSentTargets,
         durationMs: Date.now() - started,
         params,
         timedOut,
