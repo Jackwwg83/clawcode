@@ -31,7 +31,7 @@ export function mapSdkResultToRunResult(ctx: {
     resultMessage?.type === "result" && resultMessage.subtype === "success"
       ? resultMessage.result
       : "";
-  const fullText = streamedText || resultText;
+  const fullText = annotateAutoContinuation(streamedText || resultText);
 
   const agentMeta: EmbeddedPiAgentMeta = {
     sessionId: params.sessionId,
@@ -149,4 +149,25 @@ function mapSdkErrorKind(result: SDKResultMessage):
   // 其他 SDK 错误没有直接对应的 OpenClaw error kind
   // 不设置 error kind → 调用方按普通失败处理
   return undefined;
+}
+
+function annotateAutoContinuation(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const marker = "User: Conversation info (untrusted metadata):";
+  const atStart = text.startsWith(marker);
+  const newlineIndex = text.indexOf(`\n${marker}`);
+  const markerIndex = atStart ? 0 : newlineIndex >= 0 ? newlineIndex + 1 : -1;
+  if (markerIndex < 0) {
+    return text;
+  }
+
+  const notice = '[系统提示] 以下以 "User:" 开头的段落是模型自动续写，不代表用户真实发送的新消息。';
+  const prefix = text.slice(0, markerIndex).trimEnd();
+  const suffix = text.slice(markerIndex);
+  if (!prefix) {
+    return `${notice}\n\n${suffix}`;
+  }
+  return `${prefix}\n\n${notice}\n\n${suffix}`;
 }

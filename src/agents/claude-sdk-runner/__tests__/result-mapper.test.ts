@@ -157,6 +157,42 @@ describe("mapSdkResultToRunResult", () => {
     expect(result.meta.error?.kind).toBe("role_ordering");
   });
 
+  it("adds notice when model auto-continues with a fake user block", () => {
+    const result = mapSdkResultToRunResult({
+      resultMessage: {
+        type: "result",
+        subtype: "success",
+        result:
+          '先给你总结。\nUser: Conversation info (untrusted metadata):\n```json\n{"conversation_label":"x"}\n```',
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        stop_reason: "end_turn",
+        total_cost_usd: 0,
+        modelUsage: {},
+        permission_denials: [],
+        uuid: "uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKResultMessage,
+      assistantTexts: [],
+      durationMs: 5,
+      params: baseParams,
+    });
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]?.text).toContain(
+      '[系统提示] 以下以 "User:" 开头的段落是模型自动续写，不代表用户真实发送的新消息。',
+    );
+    expect(result.payloads?.[0]?.text).toContain("User: Conversation info (untrusted metadata):");
+  });
+
   it("marks messaging tool dispatch when messaging tools are used", () => {
     const result = mapSdkResultToRunResult({
       resultMessage: {
