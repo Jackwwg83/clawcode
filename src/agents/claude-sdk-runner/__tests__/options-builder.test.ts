@@ -261,6 +261,62 @@ describe("options-builder", () => {
     expect(systemPrompt.append).toContain("extra prompt");
   });
 
+  it("injects Memory Recall section when memory search is enabled", () => {
+    const params = {
+      sessionId: "s",
+      sessionFile: "/tmp/s.jsonl",
+      workspaceDir: "/tmp/ws",
+      prompt: "hello",
+      timeoutMs: 30_000,
+      runId: "run",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      config: {},
+    } as unknown as RunEmbeddedPiAgentParams;
+
+    const options = buildSdkOptions(params, createStreamState());
+    const systemPrompt = options.systemPrompt as {
+      type: string;
+      preset: string;
+      append?: string;
+    };
+    expect(systemPrompt.append).toContain("## Memory Recall");
+    expect(systemPrompt.append).toContain("memory_search");
+    expect(systemPrompt.append).toContain("memory_get");
+    expect(__testing.isMemoryEnabled(params.config, params.sessionId)).toBe(true);
+  });
+
+  it("skips Memory Recall section when memory search is disabled", () => {
+    const params = {
+      sessionId: "s",
+      sessionFile: "/tmp/s.jsonl",
+      workspaceDir: "/tmp/ws",
+      prompt: "hello",
+      timeoutMs: 30_000,
+      runId: "run",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    } as unknown as RunEmbeddedPiAgentParams;
+
+    const options = buildSdkOptions(params, createStreamState());
+    const systemPrompt = options.systemPrompt as {
+      type: string;
+      preset: string;
+      append?: string;
+    };
+    expect(systemPrompt.append).not.toContain("## Memory Recall");
+    expect(__testing.isMemoryEnabled(params.config, params.sessionId)).toBe(false);
+  });
+
   it("maps thinkLevel values to maxThinkingTokens", () => {
     const expected: Record<string, number> = {
       minimal: 1024,
