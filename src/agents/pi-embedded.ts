@@ -21,7 +21,7 @@ import { resolveBootstrapContextForRun, makeBootstrapWarn } from "./bootstrap-fi
 import { runEmbeddedPiAgent as runViaPiEmbedded } from "./pi-embedded-runner.js";
 import { resolveRunWorkspaceDir } from "./workspace-run.js";
 
-function shouldUseClaudeSdk(params: RunEmbeddedPiAgentParams): boolean {
+export function shouldUseClaudeSdk(params: RunEmbeddedPiAgentParams): boolean {
   if (process.env.CLAWCODE_RUNTIME !== "claude-sdk") {
     return false;
   }

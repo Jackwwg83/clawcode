@@ -40,7 +40,7 @@ type SdkSessionMeta = {
  *
  * Design principle:
  * - OpenClaw SessionManager is the source of truth
- * - SDK sessions are ephemeral (persistSession: false)
+ * - SDK sessions are persistent (persistSession: true) to support multi-turn resume
  * - History is passed to SDK via the prompt parameter
  * - Results are written back to SessionManager by the caller
  *
@@ -186,7 +186,7 @@ function loadSessionHistoryLines(params: RunEmbeddedPiAgentParams): string[] {
         continue;
       }
       messages.push({
-        role: role as "user" | "assistant",
+        role: role,
         content: [{ type: "text", text }],
         timestamp: Date.now(),
       } as unknown as AgentMessage);

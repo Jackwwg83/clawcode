@@ -3,8 +3,6 @@ import type {
   SDKAssistantMessage,
   SDKPartialAssistantMessage,
   SDKStatusMessage,
-  SDKToolProgressMessage,
-  SDKToolUseSummaryMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";

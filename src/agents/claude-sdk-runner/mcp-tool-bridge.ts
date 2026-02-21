@@ -1,7 +1,6 @@
 import {
   createSdkMcpServer,
   type McpSdkServerConfigWithInstance,
-  type SdkMcpToolDefinition,
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import type { MessagingToolSend } from "../pi-embedded-messaging.js";
@@ -13,6 +12,7 @@ import { createOpenClawCodingTools } from "../pi-tools.js";
 const INVALID_TOOL_NAME_PATTERN = /[^A-Za-z0-9._-]/;
 
 type ToolLike = ReturnType<typeof createOpenClawCodingTools>[number];
+type SdkMcpServerTool = NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>[number];
 
 export function buildOpenClawMcpServer(params: {
   runParams: RunEmbeddedPiAgentParams;
@@ -58,7 +58,7 @@ export function buildOpenClawMcpServer(params: {
   });
   const mcpTools = tools
     .map((tool) => toMcpToolDefinition(tool, streamState))
-    .filter((tool): tool is SdkMcpToolDefinition<any> => Boolean(tool));
+    .filter((tool): tool is SdkMcpServerTool => Boolean(tool));
 
   if (mcpTools.length === 0) {
     return undefined;
@@ -74,7 +74,7 @@ export function buildOpenClawMcpServer(params: {
 function toMcpToolDefinition(
   tool: ToolLike,
   streamState: StreamState,
-): SdkMcpToolDefinition<any> | undefined {
+): SdkMcpServerTool | undefined {
   const name = tool.name?.trim();
   if (!name || INVALID_TOOL_NAME_PATTERN.test(name) || name.length > 128) {
     return undefined;
@@ -273,3 +273,12 @@ function normalizeToolName(toolName: string): string {
   const normalized = toolName.trim().toLowerCase();
   return normalized.split("__").pop() ?? normalized;
 }
+
+export const __testing = {
+  toMcpToolDefinition,
+  toMcpInputSchema,
+  toMcpCallToolResult,
+  isMessagingToolName,
+  collectMessagingSignalsFromInput,
+  collectMessagingSignalsFromResult,
+};

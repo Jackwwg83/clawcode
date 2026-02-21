@@ -24,6 +24,14 @@ export async function runClaudeSdkAgent(
   const state = createStreamState();
   const options = buildSdkOptions(params, state);
   const handle = registerSdkRun(params.sessionId);
+  let didClearRun = false;
+  const clearActiveRun = () => {
+    if (didClearRun) {
+      return;
+    }
+    didClearRun = true;
+    clearSdkRun(params.sessionId, handle);
+  };
   let resultMessage: SDKResultMessage | undefined;
   let didPersist = false;
 
@@ -66,6 +74,24 @@ export async function runClaudeSdkAgent(
         skipHistory: !!resumeSessionId,
       },
     );
+    if (params.abortSignal?.aborted) {
+      clearActiveRun();
+      return {
+        payloads: [],
+        meta: {
+          durationMs: 0,
+          aborted: true,
+          agentMeta: {
+            sessionId: params.sessionId,
+            provider: params.provider ?? "anthropic",
+            model: params.model ?? "claude-opus-4-6",
+          },
+        },
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentTargets: [],
+      } satisfies EmbeddedPiRunResult;
+    }
     const conversation = query({ prompt, options });
 
     // Wire abort to handle (so abortEmbeddedPiRun works)
@@ -164,6 +190,6 @@ export async function runClaudeSdkAgent(
     if (timeoutTimer) {
       clearTimeout(timeoutTimer);
     }
-    clearSdkRun(params.sessionId, handle);
+    clearActiveRun();
   }
 }

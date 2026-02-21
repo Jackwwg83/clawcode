@@ -12,6 +12,23 @@ type SdkPluginConfig = import("@anthropic-ai/claude-agent-sdk").SdkPluginConfig;
 const DEFAULT_SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 const CLAUDE_PLUGINS_DIR = path.join(".claude", "plugins");
 const PLUGIN_MANIFEST_RELATIVE = path.join(".claude-plugin", "plugin.json");
+const ENV_ALLOWLIST_PREFIXES = ["ANTHROPIC_", "CLAWCODE_", "CLAUDE_"];
+const ENV_ALLOWLIST_EXACT = new Set([
+  "PATH",
+  "HOME",
+  "SHELL",
+  "LANG",
+  "TERM",
+  "TMPDIR",
+  "USER",
+  "LOGNAME",
+  "XDG_RUNTIME_DIR",
+  "NODE_OPTIONS",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_DISABLE_COMPILE_CACHE",
+  "NO_COLOR",
+  "FORCE_COLOR",
+]);
 
 export function buildSdkOptions(
   params: RunEmbeddedPiAgentParams,
@@ -66,6 +83,11 @@ export function buildSdkOptions(
       ? { type: "preset", preset: "claude_code", append }
       : { type: "preset", preset: "claude_code" },
 
+    // SECURITY NOTE: bypassPermissions is intentional.
+    // OpenClaw enforces permissions in gateway hooks, and this SDK subprocess
+    // is non-interactive so it cannot prompt for runtime approvals.
+    // Runtime routing to this path is also explicitly gated by CLAWCODE_RUNTIME
+    // and provider=anthropic checks in shouldUseClaudeSdk().
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
 
@@ -73,8 +95,7 @@ export function buildSdkOptions(
     includePartialMessages: true,
     settingSources: resolveSettingSources(),
 
-    // 继承完整环境变量，确保 ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等认证配置传递到 claude 子进程
-    env: { ...process.env },
+    env: buildSafeEnv(),
 
     // Phase 3: 启用 SDK 内置工具（移除 Phase 1b 的 disallowedTools）
     // 如果 OpenClaw 明确禁用了工具，则在 SDK 侧也禁用
@@ -158,9 +179,13 @@ function resolveClaudeSdkPlugins(agentCwd: string): SdkPluginConfig[] {
   const envPaths = process.env.CLAWCODE_CLAUDE_SDK_PLUGIN_PATHS?.trim();
   if (envPaths) {
     for (const value of envPaths.split(path.delimiter)) {
-      const resolved = value.trim();
-      if (resolved) {
-        roots.add(path.resolve(resolved));
+      const trimmed = value.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const resolved = path.resolve(trimmed);
+      if (isPathWithinAllowedRoots(resolved)) {
+        roots.add(resolved);
       }
     }
   }
@@ -210,9 +235,13 @@ function walkPluginRoots(dirPath: string, out: Set<string>, depth: number): void
     }
     if (entry.isSymbolicLink()) {
       try {
-        const stat = fs.statSync(childPath);
+        const resolved = fs.realpathSync(childPath);
+        if (!isPathWithinAllowedRoots(resolved)) {
+          continue;
+        }
+        const stat = fs.statSync(resolved);
         if (stat.isDirectory()) {
-          walkPluginRoots(childPath, out, depth + 1);
+          walkPluginRoots(resolved, out, depth + 1);
         }
       } catch {
         // ignore broken symlink / unreadable path
@@ -224,3 +253,34 @@ function walkPluginRoots(dirPath: string, out: Set<string>, depth: number): void
 function hasPluginManifest(dirPath: string): boolean {
   return fs.existsSync(path.join(dirPath, PLUGIN_MANIFEST_RELATIVE));
 }
+
+function buildSafeEnv(): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (ENV_ALLOWLIST_EXACT.has(key)) {
+      safe[key] = value;
+      continue;
+    }
+    if (ENV_ALLOWLIST_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      safe[key] = value;
+    }
+  }
+  return safe;
+}
+
+function isPathWithinAllowedRoots(candidatePath: string): boolean {
+  const resolvedPath = path.resolve(candidatePath);
+  return [os.homedir(), process.cwd()].some((root) => {
+    const resolvedRoot = path.resolve(root);
+    const relative = path.relative(resolvedRoot, resolvedPath);
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  });
+}
+
+export const __testing = {
+  buildSafeEnv,
+  isPathWithinAllowedRoots,
+};
