@@ -8,6 +8,7 @@ import type { StreamState } from "./stream-adapter.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
 import { resolveModelAuthMode } from "../model-auth.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
+import { createMemorySearchTool, createMemoryGetTool } from "../tools/memory-tool.js";
 
 const INVALID_TOOL_NAME_PATTERN = /[^A-Za-z0-9._-]/;
 
@@ -56,7 +57,27 @@ export function buildOpenClawMcpServer(params: {
     requireExplicitMessageTarget: runParams.requireExplicitMessageTarget,
     disableMessageTool: runParams.disableMessageTool,
   });
-  const mcpTools = tools
+
+  // Inject memory tools if config supports them.
+  const memoryTools: ToolLike[] = [];
+  const sessionKey = runParams.sessionKey ?? runParams.sessionId;
+  const memorySearchTool = createMemorySearchTool({
+    config: runParams.config,
+    agentSessionKey: sessionKey,
+  });
+  if (memorySearchTool) {
+    memoryTools.push(memorySearchTool);
+  }
+  const memoryGetTool = createMemoryGetTool({
+    config: runParams.config,
+    agentSessionKey: sessionKey,
+  });
+  if (memoryGetTool) {
+    memoryTools.push(memoryGetTool);
+  }
+
+  const allTools = [...tools, ...memoryTools];
+  const mcpTools = allTools
     .map((tool) => toMcpToolDefinition(tool, streamState))
     .filter((tool): tool is SdkMcpServerTool => Boolean(tool));
 

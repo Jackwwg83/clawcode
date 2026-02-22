@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { StreamState } from "./stream-adapter.js";
 import type { RunEmbeddedPiAgentParams } from "./types.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveMemorySearchConfig } from "../memory-search.js";
+import { buildSdkHooks } from "./hook-bridge.js";
 import { buildOpenClawMcpServer } from "./mcp-tool-bridge.js";
 
 type SdkOptions = import("@anthropic-ai/claude-agent-sdk").Options;
@@ -65,6 +69,18 @@ export function buildSdkOptions(
       "especially the application code directory and the configuration directory.\n" +
       "If the user asks you to work on files, create them inside this workspace.\n",
   );
+
+  // 2b. Memory recall section (if memory tools are available)
+  const memoryEnabled = isMemoryEnabled(params.config, params.sessionKey ?? params.sessionId);
+  if (memoryEnabled) {
+    appendParts.push(
+      "## Memory Recall\n" +
+        "Before answering anything about prior work, decisions, dates, people, preferences, or todos: " +
+        "run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. " +
+        "If low confidence after search, say you checked.\n" +
+        "Citations: include Source: <path#line> when it helps the user verify memory snippets.\n",
+    );
+  }
 
   // 3. Append extraSystemPrompt (group info, etc.)
   if (params.extraSystemPrompt) {
@@ -134,6 +150,15 @@ export function buildSdkOptions(
     if (openclawMcp) {
       options.mcpServers = { openclaw: openclawMcp };
     }
+  }
+
+  // Hook bridge: map OpenClaw plugin hooks to SDK hooks.
+  const sdkHooks = buildSdkHooks({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey ?? params.sessionId,
+  });
+  if (sdkHooks) {
+    options.hooks = sdkHooks;
   }
 
   // Thinking level mapping
@@ -280,7 +305,20 @@ function isPathWithinAllowedRoots(candidatePath: string): boolean {
   });
 }
 
+function isMemoryEnabled(config: OpenClawConfig | undefined, sessionKey: string): boolean {
+  if (!config) {
+    return false;
+  }
+  try {
+    const agentId = resolveSessionAgentId({ sessionKey, config });
+    return !!resolveMemorySearchConfig(config, agentId);
+  } catch {
+    return false;
+  }
+}
+
 export const __testing = {
   buildSafeEnv,
   isPathWithinAllowedRoots,
+  isMemoryEnabled,
 };

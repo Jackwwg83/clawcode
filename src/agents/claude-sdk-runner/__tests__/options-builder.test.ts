@@ -1,12 +1,42 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedPiAgentParams } from "../../pi-embedded-runner/run/params.js";
+import * as hookBridge from "../hook-bridge.js";
 import { __testing, buildSdkOptions } from "../options-builder.js";
 import { createStreamState } from "../stream-adapter.js";
 
 describe("options-builder", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sets SDK hooks when hook bridge returns matches", () => {
+    const sdkHooks = {
+      PreToolUse: [{ hooks: [vi.fn(async () => ({ continue: true }))] }],
+    } as unknown as NonNullable<ReturnType<typeof hookBridge.buildSdkHooks>>;
+    const buildSdkHooksSpy = vi.spyOn(hookBridge, "buildSdkHooks").mockReturnValue(sdkHooks);
+
+    const params = {
+      sessionId: "s",
+      sessionFile: "/tmp/s.jsonl",
+      workspaceDir: "/tmp/ws",
+      prompt: "hello",
+      timeoutMs: 30_000,
+      runId: "run",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    } as unknown as RunEmbeddedPiAgentParams;
+
+    const options = buildSdkOptions(params, createStreamState());
+    expect(options.hooks).toBe(sdkHooks);
+    expect(buildSdkHooksSpy).toHaveBeenCalledWith({
+      agentId: undefined,
+      sessionKey: "s",
+    });
+  });
+
   it("uses run workspace as cwd and enables bypass permissions", async () => {
     const params = {
       sessionId: "s",
@@ -259,6 +289,62 @@ describe("options-builder", () => {
     expect(systemPrompt.append).toContain("## /workspace/SOUL.md");
     expect(systemPrompt.append).toContain("If SOUL.md is present, embody its persona and tone.");
     expect(systemPrompt.append).toContain("extra prompt");
+  });
+
+  it("injects Memory Recall section when memory search is enabled", () => {
+    const params = {
+      sessionId: "s",
+      sessionFile: "/tmp/s.jsonl",
+      workspaceDir: "/tmp/ws",
+      prompt: "hello",
+      timeoutMs: 30_000,
+      runId: "run",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      config: {},
+    } as unknown as RunEmbeddedPiAgentParams;
+
+    const options = buildSdkOptions(params, createStreamState());
+    const systemPrompt = options.systemPrompt as {
+      type: string;
+      preset: string;
+      append?: string;
+    };
+    expect(systemPrompt.append).toContain("## Memory Recall");
+    expect(systemPrompt.append).toContain("memory_search");
+    expect(systemPrompt.append).toContain("memory_get");
+    expect(__testing.isMemoryEnabled(params.config, params.sessionId)).toBe(true);
+  });
+
+  it("skips Memory Recall section when memory search is disabled", () => {
+    const params = {
+      sessionId: "s",
+      sessionFile: "/tmp/s.jsonl",
+      workspaceDir: "/tmp/ws",
+      prompt: "hello",
+      timeoutMs: 30_000,
+      runId: "run",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    } as unknown as RunEmbeddedPiAgentParams;
+
+    const options = buildSdkOptions(params, createStreamState());
+    const systemPrompt = options.systemPrompt as {
+      type: string;
+      preset: string;
+      append?: string;
+    };
+    expect(systemPrompt.append).not.toContain("## Memory Recall");
+    expect(__testing.isMemoryEnabled(params.config, params.sessionId)).toBe(false);
   });
 
   it("maps thinkLevel values to maxThinkingTokens", () => {
